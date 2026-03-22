@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tunisia RTU Topology Map - Network with Central Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-content">
+        <div class="topbar-title">
+          <h1>Tunisia RTU Topology Map</h1>
+        </div>
+        <div class="kpis">
+          <span id="kpi-rtus" class="pill"><strong>5</strong> RTUs</span>
+          <span id="kpi-routes" class="pill"><strong>13</strong> Routes</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="map-layout">
+      <section class="map-card">
+        <div id="topology-map" aria-label="Tunisia RTU topology map"></div>
+        
+        <!-- Drawing Control Panel -->
+        <div id="drawing-panel" class="drawing-panel hidden">
+          <div class="drawing-header">
+            <h3>Create New Route</h3>
+            <button id="close-drawing" class="close-btn">✕</button>
+          </div>
+          <div class="drawing-controls">
+            <p id="drawing-instructions" style="color: #1e40af; font-weight: 600; margin-bottom: 12px;">Step 1: Click on an RTU to start</p>
+            <div id="selected-rtu-info" style="background: #dbeafe; padding: 8px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; display: none;">
+              Drawing from: <strong id="selected-rtu-name"></strong>
+            </div>
+            <div class="drawing-stats">
+              <div class="stat">
+                <span class="stat-label">Waypoints:</span>
+                <span id="point-count" class="stat-value">0</span>
+              </div>
+              <div class="stat">
+                <span class="stat-label">Distance:</span>
+                <span id="route-distance" class="stat-value">0 km</span>
+              </div>
+            </div>
+            <div class="drawing-actions">
+              <button id="finish-route-btn" class="btn btn-primary" disabled style="background: #16a34a; border-color: #16a34a;">✓ Finish Route</button>
+              <button id="undo-point-btn" class="btn btn-secondary" disabled>← Remove Point</button>
+              <button id="cancel-drawing-btn" class="btn btn-secondary" style="background: #dc2626; border-color: #dc2626; color: white;">✕ Cancel</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="app.js"></script>
+</body>
+</html>

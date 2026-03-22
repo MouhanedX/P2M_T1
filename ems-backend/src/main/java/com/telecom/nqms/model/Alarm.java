@@ -1,0 +1,174 @@
+package com.telecom.nqms.model;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import com.fasterxml.jackson.annotation.JsonAlias;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.index.CompoundIndex;
+import org.springframework.data.mongodb.core.index.CompoundIndexes;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+@Document(collection = "alarms")
+@CompoundIndexes({
+    @CompoundIndex(name = "rtu_created_idx", def = "{'rtu_id': 1, 'lifecycle.created_at': -1}"),
+    @CompoundIndex(name = "route_status_idx", def = "{'route_id': 1, 'status': 1}"),
+    @CompoundIndex(name = "severity_status_created_idx", def = "{'severity': 1, 'status': 1, 'lifecycle.created_at': -1}")
+})
+public class Alarm {
+    
+    @Id
+    private String id;
+    
+    @Indexed(unique = true)
+    @JsonAlias("alarm_id")
+    private String alarmId;
+    
+    @Indexed
+    @JsonAlias("rtu_id")
+    private String rtuId;
+    
+    @Indexed
+    @JsonAlias("route_id")
+    private String routeId;
+    
+    @JsonAlias("alarm_type")
+    private AlarmType alarmType;
+    
+    @Indexed
+    private AlarmSeverity severity;
+    
+    @Indexed
+    private AlarmStatus status;
+    
+    private String description;
+    
+    private AlarmDetails details;
+    
+    private TraceData traceData;
+    
+    private ImpactInfo impact;
+    
+    private Lifecycle lifecycle;
+    
+    private NotificationInfo notifications;
+    
+    private List<String> tags;
+    
+    @LastModifiedDate
+    private Instant updatedAt;
+    
+    // Nested classes
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class AlarmDetails {
+        private Double totalLossDb;
+        private Double eventLocationKm;
+        private String eventType;
+        private Double deviationFromBaselineDb;
+    }
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class TraceData {
+        private String traceId;
+        private Double fiberLengthKm;
+        private Integer measurementDurationMs;
+        private List<OtdrEvent> events;
+    }
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class OtdrEvent {
+        private String type;
+        private Double distanceKm;
+        private Double lossDb;
+        private Double reflectionDb;
+    }
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ImpactInfo {
+        private List<String> affectedServices;
+        private Integer estimatedAffectedUsers;
+        private ServiceImpact serviceImpact;
+    }
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Lifecycle {
+        @CreatedDate
+        private Instant createdAt;
+        private Boolean acknowledged;
+        private Instant acknowledgedAt;
+        private String acknowledgedBy;
+        private Boolean resolved;
+        private Instant resolvedAt;
+        private String resolvedBy;
+        private String resolutionNotes;
+        private Boolean escalated;
+        private Integer escalationLevel;
+    }
+    
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class NotificationInfo {
+        private Boolean emailSent;
+        private Boolean smsSent;
+        private Boolean webhookSent;
+        private Integer notificationAttempts;
+    }
+    
+    // Enums
+    public enum AlarmType {
+        FIBER_FAULT, 
+        FIBER_BREAK, 
+        DEGRADATION, 
+        RTU_AVAILABILITY, 
+        HIGH_EVENT_LOSS
+    }
+    
+    public enum AlarmSeverity {
+        LOW, MEDIUM, HIGH, CRITICAL
+    }
+    
+    public enum AlarmStatus {
+        ACTIVE, 
+        ACKNOWLEDGED, 
+        RESOLVED, 
+        CLEARED, 
+        SUPPRESSED
+    }
+    
+    public enum ServiceImpact {
+        NONE, 
+        MINOR, 
+        MODERATE, 
+        MAJOR, 
+        FULL_OUTAGE
+    }
+}

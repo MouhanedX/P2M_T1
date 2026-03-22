@@ -1,0 +1,159 @@
+import httpx
+import asyncio
+import logging
+from datetime import timezone
+from typing import Optional
+from models import Alarm, OTDRTestReport
+from config import settings
+
+logger = logging.getLogger(__name__)
+
+
+class EMSClient:
+    """Client for communicating with EMS (Element Management System)."""
+    
+    def __init__(self):
+        self.ems_url = settings.ems_url
+        self.timeout = settings.ems_connection_timeout
+        self.max_retries = 3
+        self.retry_delay = 2  # seconds
+    
+    async def send_alarm(self, alarm: Alarm) -> bool:
+        """
+        Send alarm to EMS with retry logic.
+        
+        Args:
+            alarm: Alarm object to send
+        
+        Returns:
+            True if successfully sent, False otherwise
+        """
+        endpoint = f"{self.ems_url}/api/alarms"
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    # Convert alarm to dict and exclude trace_data if too large
+                    alarm_dict = alarm.model_dump(mode='json')
+                    
+                    # Send POST request
+                    response = await client.post(endpoint, json=alarm_dict)
+                    
+                    if response.status_code in [200, 201]:
+                        logger.info(
+                            f"Alarm {alarm.alarm_id} sent successfully to EMS "
+                            f"(attempt {attempt + 1}/{self.max_retries})"
+                        )
+                        return True
+                    else:
+                        logger.warning(
+                            f"EMS returned status {response.status_code} "
+                            f"for alarm {alarm.alarm_id}"
+                        )
+            
+            except httpx.ConnectError:
+                logger.error(
+                    f"Failed to connect to EMS at {endpoint} "
+                    f"(attempt {attempt + 1}/{self.max_retries})"
+                )
+            except httpx.TimeoutException:
+                logger.error(
+                    f"Timeout connecting to EMS "
+                    f"(attempt {attempt + 1}/{self.max_retries})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Error sending alarm to EMS: {str(e)} "
+                    f"(attempt {attempt + 1}/{self.max_retries})"
+                )
+            
+            # Wait before retry (except on last attempt)
+            if attempt < self.max_retries - 1:
+                await asyncio.sleep(self.retry_delay)
+        
+        logger.error(f"Failed to send alarm {alarm.alarm_id} after {self.max_retries} attempts")
+        return False
+    
+    async def check_connection(self) -> bool:
+        """
+        Check if EMS is reachable.
+        
+        Returns:
+            True if EMS is accessible, False otherwise
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                health_paths = [
+                    "/actuator/health",
+                    "/api/health",
+                    "/health"
+                ]
+
+                for path in health_paths:
+                    try:
+                        response = await client.get(f"{self.ems_url}{path}")
+                        if response.status_code == 200:
+                            return True
+                    except Exception:
+                        continue
+
+                return False
+        except Exception as e:
+            logger.debug(f"EMS health check failed: {str(e)}")
+            return False
+    
+    async def send_heartbeat(self, rtu_status: dict) -> bool:
+        """
+        Send RTU heartbeat to EMS.
+        
+        Args:
+            rtu_status: Dictionary with RTU status information
+        
+        Returns:
+            True if successfully sent, False otherwise
+        """
+        try:
+            endpoint = f"{self.ems_url}/api/rtu/heartbeat"
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.post(endpoint, json=rtu_status)
+                return response.status_code in [200, 201]
+        except Exception as e:
+            logger.debug(f"Heartbeat send failed: {str(e)}")
+            return False
+
+    async def send_test_report(self, report: OTDRTestReport) -> bool:
+        """
+        Send normalized OTDR test report to EMS.
+        """
+        endpoint = f"{self.ems_url}/api/routes/telemetry"
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                measured_at_utc = report.measured_at
+                if measured_at_utc.tzinfo is None:
+                    measured_at_utc = measured_at_utc.replace(tzinfo=timezone.utc)
+                measured_at_iso = measured_at_utc.isoformat().replace("+00:00", "Z")
+
+                payload = {
+                    "routeId": report.route_id,
+                    "rtuId": report.rtu_id,
+                    "testMode": report.test_mode,
+                    "pulseWidthNs": report.pulse_width_ns,
+                    "dynamicRangeDb": report.dynamic_range_db,
+                    "wavelengthNm": report.wavelength_nm,
+                    "testResult": report.test_result,
+                    "totalLossDb": report.total_loss_db,
+                    "eventCount": report.event_count,
+                    "faultDistanceKm": report.fault_distance_km,
+                    "status": report.status,
+                    "measuredAt": measured_at_iso
+                }
+                response = await client.post(endpoint, json=payload)
+                if response.status_code not in [200, 201]:
+                    logger.warning(
+                        f"Telemetry rejected by EMS with status {response.status_code}: {response.text}"
+                    )
+                return response.status_code in [200, 201]
+        except Exception as e:
+            logger.debug(f"Failed to send test report: {str(e)}")
+            return False

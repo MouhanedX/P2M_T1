@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # Local MongoDB
+  mongodb:
+    image: mongo:7.0
+    container_name: nqms-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: nqms
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - nqms-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RTU Emulator (Python FastAPI)
+  rtu-emulator:
+    build:
+      context: ./rtu-emulator
+      dockerfile: Dockerfile
+    container_name: nqms-rtu-emulator
+    environment:
+      RTU_ID: RTU_01
+      RTU_NAME: Remote Test Unit 01
+      RTU_LOCATION: Tunis Central Exchange
+      EMS_URL: http://ems-backend:8080
+      MONITORING_INTERVAL: 60
+      AUTO_START: "true"
+      ROUTES: OR_1,OR_2,OR_3,OR_4,OR_5
+      ALARM_THRESHOLD_DEGRADATION: 3.0
+      ALARM_THRESHOLD_BREAK: 10.0
+      EVENT_LOSS_THRESHOLD: 1.0
+      FIBER_ATTENUATION: 0.2
+      MIN_FIBER_LENGTH: 10
+      MAX_FIBER_LENGTH: 50
+    ports:
+      - "8001:8001"
+    networks:
+      - nqms-network
+    depends_on:
+      - mongodb
+      - ems-backend
+    restart: unless-stopped
+
+  # EMS Backend (Spring Boot with MongoDB Atlas)
+  ems-backend:
+    build:
+      context: ./ems-backend
+      dockerfile: Dockerfile
+    container_name: nqms-ems-backend
+    environment:
+      # MongoDB Atlas connection string - REPLACE WITH YOUR ACTUAL URI
+      SPRING_DATA_MONGODB_URI: ${MONGODB_URI:-mongodb://localhost:27017/nqms}
+      SPRING_DATA_MONGODB_DATABASE: nqms
+      SERVER_PORT: 8080
+      SPRING_APPLICATION_NAME: nqms-ems-backend
+      # WebSocket configuration
+      WEBSOCKET_ALLOWED_ORIGINS: http://localhost:3000,http://dashboard:80
+    ports:
+      - "8080:8080"
+    networks:
+      - nqms-network
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Dashboard Frontend (React with Vite)
+  dashboard:
+    build:
+      context: ./dashboard-frontend
+      dockerfile: Dockerfile
+    container_name: nqms-dashboard
+    ports:
+      - "3000:80"
+    networks:
+      - nqms-network
+    depends_on:
+      - ems-backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+networks:
+  nqms-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
