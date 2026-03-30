@@ -3,11 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
-from typing import List
+from typing import List, Dict
 
 from models import RTUStatus, RouteInfo, OTDRTrace, Alarm
 from monitor_service import MonitorService
 from otdr_simulator import OTDRSimulator
+from mongodb_service import MongoDBService
 from config import settings
 
 # Configure logging
@@ -17,37 +18,79 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global monitor service instance
-monitor_service = None
+# Global monitor services - one per RTU
+monitor_services: Dict[str, MonitorService] = {}
+db_service = None
+
+
+async def initialize_rtu_monitors():
+    """Initialize monitor services for all RTUs from database."""
+    global monitor_services
+    
+    logger.info("Initializing RTU Emulator from database...")
+    
+    if settings.use_database_rtu:
+        # Fetch all RTUs from database
+        try:
+            rtus = db_service.fetch_all_rtus()
+            
+            if not rtus:
+                logger.warning("No RTUs found in database, using fallback RTU from config")
+                rtus = [{"rtuId": settings.rtu_id, "name": settings.rtu_name}]
+            
+            for rtu in rtus:
+                rtu_id = rtu.get("rtuId", rtu.get("id"))
+                logger.info(f"Initializing monitor for RTU: {rtu_id}")
+                monitor_services[rtu_id] = MonitorService(rtu_id)
+        
+        except Exception as e:
+            logger.error(f"Error fetching RTUs from database: {e}")
+            logger.warning("Falling back to config-based RTU")
+            monitor_services[settings.rtu_id] = MonitorService(settings.rtu_id)
+    else:
+        # Use single RTU from config
+        monitor_services[settings.rtu_id] = MonitorService(settings.rtu_id)
+    
+    logger.info(f"Initialized {len(monitor_services)} RTU monitor(s)")
+
+
+async def start_all_monitoring():
+    """Start monitoring for all RTUs."""
+    if settings.auto_start:
+        logger.info("Auto-starting monitoring for all RTUs")
+        for rtu_id, service in monitor_services.items():
+            try:
+                await service.start_monitoring()
+                logger.info(f"Started monitoring for RTU: {rtu_id}")
+            except Exception as e:
+                logger.error(f"Failed to start monitoring for RTU {rtu_id}: {e}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global monitor_service
+    global db_service
     
     # Startup
-    logger.info(f"Starting RTU Emulator: {settings.rtu_id}")
-    monitor_service = MonitorService(settings.rtu_id)
-    
-    # Auto-start monitoring if configured
-    if settings.auto_start:
-        logger.info("Auto-starting monitoring")
-        await monitor_service.start_monitoring()
+    db_service = MongoDBService(settings.mongodb_uri)
+    await initialize_rtu_monitors()
+    await start_all_monitoring()
     
     yield
     
     # Shutdown
     logger.info("Shutting down RTU Emulator")
-    if monitor_service and monitor_service.is_running:
-        await monitor_service.stop_monitoring()
+    for rtu_id, service in monitor_services.items():
+        if service.is_running:
+            await service.stop_monitoring()
+            logger.info(f"Stopped monitoring for RTU: {rtu_id}")
 
 
 # Create FastAPI application
 app = FastAPI(
     title="NQMS Fiber RTU Emulator",
     description="Remote Test Unit emulator for fiber optic network monitoring",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -66,8 +109,9 @@ async def root():
     """Root endpoint."""
     return {
         "service": "NQMS Fiber RTU Emulator",
-        "version": "1.0.0",
-        "rtu_id": settings.rtu_id,
+        "version": "2.0.0",
+        "active_rtus": len(monitor_services),
+        "rtu_ids": list(monitor_services.keys()),
         "status": "running"
     }
 
@@ -78,25 +122,51 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "rtu_id": settings.rtu_id
+        "active_rtus": len(monitor_services),
+        "rtu_ids": list(monitor_services.keys())
     }
 
 
-@app.get("/api/rtu/status", response_model=RTUStatus)
-async def get_rtu_status():
-    """Get current RTU status including all monitored routes."""
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+@app.get("/api/rtus")
+async def list_all_rtus():
+    """Get status of all RTUs."""
+    if not monitor_services:
+        raise HTTPException(status_code=503, detail="No RTU services initialized")
     
+    rtu_statuses = []
+    for rtu_id, service in monitor_services.items():
+        status_data = service.get_status()
+        ems_connected = await service.ems_client.check_connection()
+        
+        rtu_statuses.append({
+            "rtu_id": rtu_id,
+            "is_monitoring": status_data["is_monitoring"],
+            "routes_count": len(service.routes),
+            "active_alarms": status_data["alarms_sent_today"],
+            "ems_connected": ems_connected,
+            "temperature_c": status_data.get("temperature_c", 35.0)
+        })
+    
+    return rtu_statuses
+
+
+@app.get("/api/rtu/{rtu_id}/status", response_model=RTUStatus)
+async def get_rtu_status(rtu_id: str):
+    """Get current status for a specific RTU."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(
+            status_code=404,
+            detail=f"RTU {rtu_id} not found. Available RTUs: {list(monitor_services.keys())}"
+        )
+    
+    monitor_service = monitor_services[rtu_id]
     status_data = monitor_service.get_status()
-    
-    # Check EMS connection
     ems_connected = await monitor_service.ems_client.check_connection()
     
     return RTUStatus(
-        rtu_id=settings.rtu_id,
-        rtu_name=settings.rtu_name,
-        location=settings.rtu_location,
+        rtu_id=rtu_id,
+        rtu_name=status_data.get("rtu_name", rtu_id),
+        location=status_data.get("location", "Unknown"),
         is_monitoring=status_data["is_monitoring"],
         routes=status_data["routes"],
         alarms_sent_today=status_data["alarms_sent_today"],
@@ -109,48 +179,51 @@ async def get_rtu_status():
     )
 
 
-@app.post("/api/rtu/start")
-async def start_monitoring():
-    """Start periodic monitoring of all routes."""
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+@app.post("/api/rtu/{rtu_id}/start")
+async def start_rtu_monitoring(rtu_id: str):
+    """Start periodic monitoring for a specific RTU."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
+    
+    monitor_service = monitor_services[rtu_id]
     
     if monitor_service.is_running:
-        raise HTTPException(status_code=400, detail="Monitoring already running")
+        raise HTTPException(status_code=400, detail=f"Monitoring already running for RTU {rtu_id}")
     
     await monitor_service.start_monitoring()
     
     return {
-        "message": "Monitoring started",
+        "message": f"Monitoring started for RTU {rtu_id}",
         "interval_seconds": settings.monitoring_interval,
         "routes": list(monitor_service.routes.keys())
     }
 
 
-@app.post("/api/rtu/stop")
-async def stop_monitoring():
-    """Stop periodic monitoring."""
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+@app.post("/api/rtu/{rtu_id}/stop")
+async def stop_rtu_monitoring(rtu_id: str):
+    """Stop periodic monitoring for a specific RTU."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
+    
+    monitor_service = monitor_services[rtu_id]
     
     if not monitor_service.is_running:
-        raise HTTPException(status_code=400, detail="Monitoring not running")
+        raise HTTPException(status_code=400, detail=f"Monitoring not running for RTU {rtu_id}")
     
     await monitor_service.stop_monitoring()
     
-    return {"message": "Monitoring stopped"}
+    return {"message": f"Monitoring stopped for RTU {rtu_id}"}
 
 
-@app.post("/api/rtu/test/{route_id}")
-async def test_route(route_id: str, background_tasks: BackgroundTasks):
+@app.post("/api/rtu/{rtu_id}/test/{route_id}")
+async def test_route(rtu_id: str, route_id: str, background_tasks: BackgroundTasks):
     """
-    Trigger on-demand test for a specific route.
+    Trigger on-demand test for a specific route in an RTU.
+    """
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
     
-    Args:
-        route_id: ID of the route to test (e.g., OR_1)
-    """
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+    monitor_service = monitor_services[rtu_id]
     
     if route_id not in monitor_service.routes:
         raise HTTPException(
@@ -158,32 +231,34 @@ async def test_route(route_id: str, background_tasks: BackgroundTasks):
             detail=f"Route {route_id} not found. Available routes: {list(monitor_service.routes.keys())}"
         )
     
-    logger.info(f"On-demand test requested for route {route_id}")
-    
-    # Run test in background
+    logger.info(f"On-demand test requested for RTU {rtu_id}, route {route_id}")
     background_tasks.add_task(monitor_service.test_route, route_id, "Manual")
     
     return {
         "message": f"Test initiated for route {route_id}",
+        "rtu_id": rtu_id,
         "route_id": route_id,
         "timestamp": datetime.now().isoformat()
     }
 
 
-@app.get("/api/rtu/routes", response_model=List[RouteInfo])
-async def get_routes():
-    """Get information about all monitored routes."""
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+@app.get("/api/rtu/{rtu_id}/routes")
+async def get_rtu_routes(rtu_id: str):
+    """Get all routes for a specific RTU."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
     
+    monitor_service = monitor_services[rtu_id]
     return list(monitor_service.routes.values())
 
 
-@app.get("/api/rtu/routes/{route_id}", response_model=RouteInfo)
-async def get_route(route_id: str):
-    """Get information about a specific route."""
-    if not monitor_service:
-        raise HTTPException(status_code=503, detail="Monitor service not initialized")
+@app.get("/api/rtu/{rtu_id}/routes/{route_id}")
+async def get_rtu_route(rtu_id: str, route_id: str):
+    """Get information about a specific route in an RTU."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
+    
+    monitor_service = monitor_services[rtu_id]
     
     try:
         return monitor_service.get_route_info(route_id)
@@ -191,16 +266,15 @@ async def get_route(route_id: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.get("/api/rtu/config")
+@app.get("/api/config")
 async def get_config():
-    """Get RTU configuration."""
+    """Get RTU Emulator configuration."""
     return {
-        "rtu_id": settings.rtu_id,
-        "rtu_name": settings.rtu_name,
-        "location": settings.rtu_location,
+        "use_database_rtu": settings.use_database_rtu,
+        "active_rtus": len(monitor_services),
+        "rtu_ids": list(monitor_services.keys()),
         "ems_url": settings.ems_url,
         "monitoring_interval": settings.monitoring_interval,
-        "routes": settings.get_routes_list(),
         "thresholds": {
             "degradation_db": settings.alarm_threshold_degradation,
             "break_db": settings.alarm_threshold_break,

@@ -20,7 +20,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # RTU Emulator (Python FastAPI)
+  # RTU Emulator (Python FastAPI) - Now supports multiple RTUs from database
   rtu-emulator:
     build:
       context: ./rtu-emulator
@@ -33,7 +33,8 @@ services:
       EMS_URL: http://ems-backend:8080
       MONITORING_INTERVAL: 60
       AUTO_START: "true"
-      ROUTES: OR_1,OR_2,OR_3,OR_4,OR_5
+      USE_DATABASE_RTU: "true"
+      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/nqms}
       ALARM_THRESHOLD_DEGRADATION: 3.0
       ALARM_THRESHOLD_BREAK: 10.0
       EVENT_LOSS_THRESHOLD: 1.0

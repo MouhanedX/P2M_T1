@@ -47,10 +47,25 @@ body {
 .topbar-content {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 32px;
   flex: 1;
   width: 100%;
+  position: relative;
+}
+
+.kpi-left {
+  position: absolute;
+  left: 20px;
+  display: flex;
+  gap: 12px;
+}
+
+.kpi-right {
+  position: absolute;
+  right: 20px;
+  display: flex;
+  gap: 12px;
 }
 
 .topbar-title {
@@ -61,13 +76,13 @@ body {
   margin: 0;
   font-size: clamp(1.3rem, 2.5vw, 2rem);
   font-weight: 800;
-  color: #ffffff;
+  color: #ffda44;
   letter-spacing: -0.5px;
 }
 
 .topbar p {
   margin: 6px 0 0;
-  color: #cbd5e1;
+  color: #ffc107;
   font-size: 0.9rem;
   font-weight: 500;
   max-width: 500px;
@@ -84,11 +99,11 @@ body {
   font-size: 0.8rem;
   font-weight: 700;
   border-radius: 8px;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  border: 1px solid rgba(255, 218, 68, 0.6);
   background: linear-gradient(135deg, rgba(226, 232, 240, 0.15) 0%, rgba(203, 213, 225, 0.08) 100%);
   padding: 10px 16px;
   white-space: nowrap;
-  color: #e2e8f0;
+  color: #ffda44;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -98,7 +113,7 @@ body {
 }
 
 .pill strong {
-  color: #38bdf8;
+  color: #ffda44;
   font-weight: 800;
   font-size: 1.1em;
 }
@@ -691,4 +706,74 @@ body {
   .side-panel {
     max-height: none;
   }
+}
+
+/* Professional Popup Styles */
+.popup-container {
+  min-width: 280px;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+}
+
+.popup-header {
+  padding: 12px 14px;
+  border-left: 4px solid #0f172a;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  margin: -12px -14px 0 -14px;
+  border-radius: 12px 12px 0 0;
+}
+
+.popup-id {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 900;
+  color: #0f172a;
+  letter-spacing: -0.5px;
+  text-transform: uppercase;
+}
+
+.popup-type {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.popup-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #cbd5e1, transparent);
+  margin: 10px 0;
+}
+
+.popup-content {
+  padding: 8px 0;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.info-row:last-child {
+  border-bottom: none;
+}
+
+.info-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.info-value {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-left: 12px;
 }

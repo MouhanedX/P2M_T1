@@ -7,6 +7,7 @@ from models import RouteInfo, TraceStatus, OTDRTestReport
 from otdr_simulator import OTDRSimulator
 from alarm_service import AlarmService
 from ems_client import EMSClient
+from mongodb_service import MongoDBService
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ class MonitorService:
         self.otdr = OTDRSimulator(rtu_id)
         self.alarm_service = AlarmService(rtu_id)
         self.ems_client = EMSClient()
+        self.db_service = MongoDBService(settings.mongodb_uri)
         
         self.is_running = False
         self.routes: Dict[str, RouteInfo] = {}
@@ -33,22 +35,42 @@ class MonitorService:
         self._initialize_routes()
     
     def _initialize_routes(self):
-        """Initialize route information from configuration."""
-        configured_routes = settings.get_routes_list()
-        
-        for route_id in configured_routes:
-            config = OTDRSimulator.get_route_config(route_id)
-            if config:
+        """Initialize route information from database or configuration."""
+        if settings.use_database_rtu:
+            # Fetch routes from MongoDB for this RTU
+            logger.info(f"Fetching routes from database for RTU {self.rtu_id}")
+            db_routes = self.db_service.fetch_routes_for_rtu(self.rtu_id)
+            
+            for route_data in db_routes:
+                route_id = route_data.get("routeId", route_data.get("id"))
+                distance_km = route_data.get("distanceKm", 25)
+                
                 self.routes[route_id] = RouteInfo(
                     route_id=route_id,
-                    region=config["region"],
-                    fiber_length_km=config["length_km"],
-                    splice_count=config["splice_count"],
+                    region=route_data.get("name", f"Route {route_id}"),
+                    fiber_length_km=distance_km,
+                    splice_count=random.randint(3, 8),  # Simulate splice count
                     current_status=TraceStatus.UNKNOWN,
                     active_alarms=0
                 )
+                logger.info(f"Added route {route_id} ({distance_km} km) for RTU {self.rtu_id}")
+        else:
+            # Use legacy configuration-based routes
+            configured_routes = settings.get_routes_list()
+            
+            for route_id in configured_routes:
+                config = OTDRSimulator.get_route_config(route_id)
+                if config:
+                    self.routes[route_id] = RouteInfo(
+                        route_id=route_id,
+                        region=config["region"],
+                        fiber_length_km=config["length_km"],
+                        splice_count=config["splice_count"],
+                        current_status=TraceStatus.UNKNOWN,
+                        active_alarms=0
+                    )
         
-        logger.info(f"Initialized {len(self.routes)} routes for monitoring")
+        logger.info(f"Initialized {len(self.routes)} routes for monitoring on RTU {self.rtu_id}")
     
     async def start_monitoring(self):
         """Start the periodic monitoring process."""
@@ -124,10 +146,12 @@ class MonitorService:
         inject_fault = fault_scenario != "normal"
         
         # Generate OTDR trace
+        route_info = self.routes[route_id]
         trace = self.otdr.generate_trace(
             route_id=route_id,
             inject_fault=inject_fault,
-            fault_type=fault_scenario
+            fault_type=fault_scenario,
+            distance_km=route_info.fiber_length_km
         )
         
         # Update route info
@@ -196,15 +220,15 @@ class MonitorService:
         Returns:
             Scenario type: 'normal', 'degradation', 'break', 'high_loss_splice'
         """
-        # Probability distribution
-        # 82% normal, 12% degradation, 3% break, 3% high loss splice
+        # Probability distribution (increased for testing)
+        # 50% normal, 30% degradation, 12% break, 8% high loss splice
         rand = random.random()
         
-        if rand < 0.82:
+        if rand < 0.50:
             return "normal"
-        elif rand < 0.94:
+        elif rand < 0.80:
             return "degradation"
-        elif rand < 0.97:
+        elif rand < 0.92:
             return "break"
         else:
             return "high_loss_splice"

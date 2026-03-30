@@ -5,10 +5,14 @@ from typing import List
 class Settings(BaseSettings):
     """Application configuration settings."""
     
-    # RTU Identity
+    # RTU Identity (can be overridden per RTU when fetched from DB)
     rtu_id: str = "RTU_01"
     rtu_name: str = "Remote Test Unit 01"
     rtu_location: str = "Tunis Central Exchange"
+    
+    # Database Configuration
+    mongodb_uri: str = "mongodb://localhost:27017/nqms"
+    use_database_rtu: bool = True  # If True, fetch RTUs from database
     
     # EMS Connection
     ems_url: str = "http://localhost:8080"
@@ -16,9 +20,9 @@ class Settings(BaseSettings):
     
     # Monitoring Configuration
     monitoring_interval: int = 300  # seconds
-    auto_start: bool = False
+    auto_start: bool = True
     
-    # Routes
+    # Routes (legacy - used if use_database_rtu=False)
     routes: str = "OR_1,OR_2,OR_3,OR_4,OR_5"
     
     # Alarm Thresholds (in dB)

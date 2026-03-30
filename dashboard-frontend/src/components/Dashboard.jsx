@@ -168,8 +168,22 @@ function Dashboard() {
 
   const loadRoutes = async () => {
     try {
-      const response = await routesAPI.getAll();
-      setRoutes(response.data || []);
+      // Get all RTUs first
+      const rtusResponse = await rtusAPI.getAll();
+      const allRtus = Array.isArray(rtusResponse.data) ? rtusResponse.data : rtusResponse.data.value || [];
+      
+      // Fetch routes for each RTU from database
+      const allRoutes = [];
+      for (const rtu of allRtus) {
+        try {
+          const routesResponse = await rtusAPI.getRoutes(rtu.rtu_id);
+          const rtuRoutes = Array.isArray(routesResponse.data) ? routesResponse.data : routesResponse.data.routes || [];
+          allRoutes.push(...rtuRoutes);
+        } catch (err) {
+          console.error(`Error loading routes for RTU ${rtu.rtu_id}:`, err);
+        }
+      }
+      setRoutes(allRoutes);
     } catch (error) {
       console.error('Error loading routes:', error);
       setRoutes([]);
@@ -178,8 +192,10 @@ function Dashboard() {
 
   const loadRtuStatus = async () => {
     try {
-      const response = await rtusAPI.getStatus();
-      setRtuStatus(response.data);
+      // Get all RTUs from database
+      const response = await rtusAPI.getAll();
+      const rtus = Array.isArray(response.data) ? response.data : response.data.value || [];
+      setRtuStatus(rtus);
     } catch (error) {
       console.error('Error loading RTU status:', error);
       setRtuStatus(null);

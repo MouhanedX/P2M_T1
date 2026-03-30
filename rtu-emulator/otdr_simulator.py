@@ -23,7 +23,7 @@ class OTDRSimulator:
         self.attenuation = settings.fiber_attenuation
     
     def generate_trace(self, route_id: str, inject_fault: bool = False, 
-                       fault_type: str = "normal") -> OTDRTrace:
+                       fault_type: str = "normal", distance_km: float = None) -> OTDRTrace:
         """
         Generate a simulated OTDR trace for a route.
         
@@ -31,24 +31,29 @@ class OTDRSimulator:
             route_id: Identifier of the route to test
             inject_fault: Whether to inject a fault
             fault_type: Type of fault ('normal', 'degradation', 'break')
+            distance_km: Length of the fiber route (from database or defaults)
         
         Returns:
             OTDRTrace object with simulated measurements
         """
-        if route_id not in self.ROUTE_CONFIG:
-            raise ValueError(f"Unknown route: {route_id}")
+        # If distance not provided, try to get from config or use default
+        if distance_km is None:
+            if route_id in self.ROUTE_CONFIG:
+                distance_km = self.ROUTE_CONFIG[route_id]["length_km"]
+            else:
+                # Default for database routes
+                distance_km = random.uniform(10.0, 100.0)
         
-        route_config = self.ROUTE_CONFIG[route_id]
-        fiber_length = route_config["length_km"]
-        splice_count = route_config["splice_count"]
+        # Determine splice count based on distance
+        splice_count = max(3, int(distance_km / 6))  # ~1 splice per 6km
         
         # Generate events along the fiber
-        events = self._generate_events(fiber_length, splice_count, inject_fault, fault_type)
+        events = self._generate_events(distance_km, splice_count, inject_fault, fault_type)
         
         # Calculate total loss
-        total_loss = self._calculate_total_loss(fiber_length, events)
+        total_loss = self._calculate_total_loss(distance_km, events)
         
-        # Determine status based on loss
+        # Determine trace status
         status = self._determine_status(total_loss, events)
         
         # Create trace object
@@ -56,7 +61,7 @@ class OTDRSimulator:
             route_id=route_id,
             rtu_id=self.rtu_id,
             timestamp=datetime.now(),
-            fiber_length_km=fiber_length,
+            fiber_length_km=distance_km,
             total_loss_db=round(total_loss, 2),
             events=events,
             status=status,
