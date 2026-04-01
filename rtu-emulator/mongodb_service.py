@@ -59,9 +59,8 @@ class MongoDBService:
         """Fetch all routes assigned to a specific RTU."""
         try:
             with self.get_connection() as db:
-                routes = list(db[self.route_collection].find(
-                    {"rtuId": rtu_id, "status": "ACTIVE"}
-                ))
+                # Route status is operational (NORMAL/DEGRADATION/BREAK...), not a lifecycle ACTIVE flag.
+                routes = list(db[self.route_collection].find({"rtuId": rtu_id}))
                 logger.info(f"Fetched {len(routes)} routes for RTU {rtu_id}")
                 return routes
         except Exception as e:
@@ -84,8 +83,8 @@ class MongoDBService:
         """Fetch all active routes from database."""
         try:
             with self.get_connection() as db:
-                routes = list(db[self.route_collection].find({"status": "ACTIVE"}))
-                logger.info(f"Fetched {len(routes)} active routes from database")
+                routes = list(db[self.route_collection].find({}))
+                logger.info(f"Fetched {len(routes)} routes from database")
                 return routes
         except Exception as e:
             logger.error(f"Error fetching routes: {e}")

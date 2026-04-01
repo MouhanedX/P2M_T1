@@ -209,3 +209,54 @@ class EMSClient:
         
         logger.error(f"Failed to send KPI {kpi.kpi_id} after {self.max_retries} attempts")
         return False
+
+    async def get_active_alarms_by_route(self, route_id: str) -> list[dict]:
+        """Fetch active alarms for a route from EMS backend."""
+        endpoint = f"{self.ems_url}/api/alarms/route/{route_id}"
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(endpoint)
+                if response.status_code != 200:
+                    logger.warning(
+                        "Failed to fetch route alarms from EMS for %s (status=%s)",
+                        route_id,
+                        response.status_code,
+                    )
+                    return []
+
+                alarms = response.json() or []
+                return [a for a in alarms if a.get("status") == "ACTIVE"]
+        except Exception as e:
+            logger.error("Error fetching active alarms for route %s: %s", route_id, str(e))
+            return []
+
+    async def resolve_alarm(self, alarm_id: str, resolved_by: str, notes: str) -> bool:
+        """Resolve one alarm in EMS backend."""
+        endpoint = f"{self.ems_url}/api/alarms/{alarm_id}/resolve"
+        payload = {
+            "resolvedBy": resolved_by,
+            "resolutionNotes": notes,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(endpoint, json=payload)
+                return response.status_code in [200, 201]
+        except Exception as e:
+            logger.error("Error resolving alarm %s: %s", alarm_id, str(e))
+            return False
+
+    async def resolve_active_alarms_for_route(self, route_id: str, resolved_by: str, notes: str) -> int:
+        """Resolve all active alarms for a route. Returns number of resolved alarms."""
+        alarms = await self.get_active_alarms_by_route(route_id)
+        resolved_count = 0
+
+        for alarm in alarms:
+            alarm_id = alarm.get("alarmId") or alarm.get("alarm_id") or alarm.get("id")
+            if not alarm_id:
+                continue
+
+            if await self.resolve_alarm(alarm_id, resolved_by, notes):
+                resolved_count += 1
+
+        return resolved_count

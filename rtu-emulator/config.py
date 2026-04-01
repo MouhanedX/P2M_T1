@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # Monitoring Configuration
     monitoring_interval: int = 60  # seconds - alarms every minute
     auto_start: bool = True
+    auto_fault_generation: bool = False  # If False, alarms are only raised via manual test interface
     
     # Routes (legacy - used if use_database_rtu=False)
     routes: str = "OR_1,OR_2,OR_3,OR_4,OR_5"

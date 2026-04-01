@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import logging
 from typing import List, Dict
+from pydantic import BaseModel
 
 from models import RTUStatus, RouteInfo, OTDRTrace, Alarm
 from monitor_service import MonitorService
@@ -21,6 +22,10 @@ logger = logging.getLogger(__name__)
 # Global monitor services - one per RTU
 monitor_services: Dict[str, MonitorService] = {}
 db_service = None
+
+
+class FaultInjectionRequest(BaseModel):
+    faultType: str = "break"
 
 
 async def initialize_rtu_monitors():
@@ -232,7 +237,7 @@ async def test_route(rtu_id: str, route_id: str, background_tasks: BackgroundTas
         )
     
     logger.info(f"On-demand test requested for RTU {rtu_id}, route {route_id}")
-    background_tasks.add_task(monitor_service.test_route, route_id, "Manual")
+    background_tasks.add_task(monitor_service.test_route, route_id, "Manual", None, False)
     
     return {
         "message": f"Test initiated for route {route_id}",
@@ -264,6 +269,68 @@ async def get_rtu_route(rtu_id: str, route_id: str):
         return monitor_service.get_route_info(route_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/rtu/{rtu_id}/routes/{route_id}/fault")
+async def inject_route_fault(rtu_id: str, route_id: str, request: FaultInjectionRequest):
+    """Inject a manual fault on a route and raise an alarm immediately."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
+
+    monitor_service = monitor_services[rtu_id]
+
+    if route_id not in monitor_service.routes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Route {route_id} not found in RTU {rtu_id}. Available routes: {list(monitor_service.routes.keys())}"
+        )
+
+    try:
+        result = await monitor_service.trigger_manual_fault(route_id, request.faultType)
+        return {
+            "message": f"Manual fault injected for route {route_id}",
+            "rtu_id": rtu_id,
+            "route_id": route_id,
+            "fault_type": result["fault_type"],
+            "status": result["status"],
+            "timestamp": datetime.now().isoformat(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to inject fault for {route_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to inject route fault")
+
+
+@app.post("/api/rtu/{rtu_id}/routes/{route_id}/resolve")
+async def resolve_route_fault(rtu_id: str, route_id: str):
+    """Resolve a manual fault and clear active alarms for the route."""
+    if rtu_id not in monitor_services:
+        raise HTTPException(status_code=404, detail=f"RTU {rtu_id} not found")
+
+    monitor_service = monitor_services[rtu_id]
+
+    if route_id not in monitor_service.routes:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Route {route_id} not found in RTU {rtu_id}. Available routes: {list(monitor_service.routes.keys())}"
+        )
+
+    try:
+        result = await monitor_service.resolve_manual_fault(route_id)
+        return {
+            "message": f"Manual fault resolved for route {route_id}",
+            "rtu_id": rtu_id,
+            "route_id": route_id,
+            "resolved_alarms": result["resolved_alarms"],
+            "status": result["status"],
+            "timestamp": datetime.now().isoformat(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to resolve fault for {route_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to resolve route fault")
 
 
 @app.get("/api/config")

@@ -33,6 +33,7 @@ services:
       EMS_URL: http://ems-backend:8080
       MONITORING_INTERVAL: 60
       AUTO_START: "true"
+      AUTO_FAULT_GENERATION: "false"
       USE_DATABASE_RTU: "true"
       MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/nqms}
       ALARM_THRESHOLD_DEGRADATION: 3.0
@@ -95,6 +96,23 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 -O /dev/null http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  # Standalone RTU Map (static app)
+  standalone-rtu-map:
+    image: nginx:alpine
+    container_name: nqms-standalone-rtu-map
+    volumes:
+      - ./standalone-rtu-map:/usr/share/nginx/html:ro
+    ports:
+      - "8090:80"
+    networks:
+      - nqms-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 -O /dev/null http://127.0.0.1/ || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3

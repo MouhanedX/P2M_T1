@@ -33,12 +33,26 @@ class MonitorService:
         self.power_supply = "Normal"
         self.otdr_availability = "Ready"
         self.kpi_send_counter = 0  # Track KPI sending frequency
+        self.manual_faults: Dict[str, str] = {}
         
         # Initialize routes
         self._initialize_routes()
     
     def _initialize_routes(self):
         """Initialize route information from database or configuration."""
+        def extract_distance_km(route_data: dict) -> float:
+            # Support both legacy and current route schemas.
+            direct = route_data.get("distanceKm")
+            if isinstance(direct, (int, float)):
+                return float(direct)
+
+            fiber_spec = route_data.get("fiberSpec") or {}
+            fiber_length = fiber_spec.get("lengthKm")
+            if isinstance(fiber_length, (int, float)):
+                return float(fiber_length)
+
+            return 25.0
+
         if settings.use_database_rtu:
             # Fetch routes from MongoDB for this RTU
             logger.info(f"Fetching routes from database for RTU {self.rtu_id}")
@@ -46,11 +60,11 @@ class MonitorService:
             
             for route_data in db_routes:
                 route_id = route_data.get("routeId", route_data.get("id"))
-                distance_km = route_data.get("distanceKm", 25)
+                distance_km = extract_distance_km(route_data)
                 
                 self.routes[route_id] = RouteInfo(
                     route_id=route_id,
-                    region=route_data.get("name", f"Route {route_id}"),
+                    region=route_data.get("region", route_data.get("routeName", f"Route {route_id}")),
                     fiber_length_km=distance_km,
                     splice_count=random.randint(3, 8),  # Simulate splice count
                     current_status=TraceStatus.UNKNOWN,
@@ -131,13 +145,21 @@ class MonitorService:
         
         for route_id in self.routes.keys():
             try:
-                await self.test_route(route_id)
+                # Periodic checks update telemetry/KPIs only.
+                # Alarm generation is now controlled manually from the test interface.
+                await self.test_route(route_id, generate_alarm=False)
                 # Small delay between tests
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Error testing route {route_id}: {str(e)}")
     
-    async def test_route(self, route_id: str, test_mode: str = "Auto"):
+    async def test_route(
+        self,
+        route_id: str,
+        test_mode: str = "Auto",
+        forced_fault: str | None = None,
+        generate_alarm: bool = True,
+    ):
         """
         Test a specific route and generate alarms if needed.
         
@@ -149,8 +171,19 @@ class MonitorService:
         
         logger.info(f"Testing route {route_id}")
         
-        # Determine if we should inject a fault (for simulation)
-        fault_scenario = self._select_fault_scenario()
+        # Fault source precedence:
+        # 1) explicit forced fault for this call
+        # 2) persistent manual fault set by test interface
+        # 3) automatic random generation (if enabled)
+        if forced_fault is not None:
+            fault_scenario = self._normalize_fault_type(forced_fault)
+        elif route_id in self.manual_faults:
+            fault_scenario = self.manual_faults[route_id]
+        elif settings.auto_fault_generation:
+            fault_scenario = self._select_fault_scenario()
+        else:
+            fault_scenario = "normal"
+
         inject_fault = fault_scenario != "normal"
         
         # Generate OTDR trace
@@ -197,35 +230,95 @@ class MonitorService:
 
         await self.ems_client.send_test_report(test_report)
         
-        # Analyze trace and generate alarm if needed
-        alarm = self.alarm_service.analyze_trace(trace)
-        
-        if alarm:
-            logger.warning(
-                f"Alarm generated for route {route_id}: "
-                f"{alarm.alarm_type.value} ({alarm.severity.value})"
-            )
-            
-            # Convert alarm to dict for storage
-            alarm_dict = alarm.model_dump(mode='json')
-            
-            # Store alarm in MongoDB
-            self.db_service.insert_alarm(alarm_dict)
-            
-            # Send alarm to EMS
-            success = await self.ems_client.send_alarm(alarm)
-            
-            if success:
-                self.alarms_sent_today += 1
-                route_info.active_alarms += 1
-                logger.info(f"Alarm {alarm.alarm_id} sent to EMS successfully")
+        if generate_alarm:
+            # Analyze trace and generate alarm if needed
+            alarm = self.alarm_service.analyze_trace(trace)
+
+            if alarm:
+                logger.warning(
+                    f"Alarm generated for route {route_id}: "
+                    f"{alarm.alarm_type.value} ({alarm.severity.value})"
+                )
+
+                # Send alarm to EMS
+                success = await self.ems_client.send_alarm(alarm)
+
+                if success:
+                    self.alarms_sent_today += 1
+                    route_info.active_alarms += 1
+                    logger.info(f"Alarm {alarm.alarm_id} sent to EMS successfully")
+                else:
+                    logger.error(f"Failed to send alarm {alarm.alarm_id} to EMS")
+
             else:
-                logger.error(f"Failed to send alarm {alarm.alarm_id} to EMS")
-        
-        else:
-            # No alarm, clear active alarms if route is normal
-            if trace.status == TraceStatus.NORMAL:
-                route_info.active_alarms = 0
+                # No alarm, clear active alarms if route is normal
+                if trace.status == TraceStatus.NORMAL:
+                    route_info.active_alarms = 0
+        elif trace.status == TraceStatus.NORMAL:
+            route_info.active_alarms = 0
+
+    async def trigger_manual_fault(self, route_id: str, fault_type: str = "break") -> dict:
+        """Inject a persistent fault on a route and raise one alarm immediately."""
+        if route_id not in self.routes:
+            raise ValueError(f"Unknown route: {route_id}")
+
+        normalized_fault = self._normalize_fault_type(fault_type)
+        self.manual_faults[route_id] = normalized_fault
+
+        await self.test_route(
+            route_id,
+            test_mode="ManualFaultInjection",
+            forced_fault=normalized_fault,
+            generate_alarm=True,
+        )
+
+        return {
+            "route_id": route_id,
+            "fault_type": normalized_fault,
+            "status": self.routes[route_id].current_status.value,
+        }
+
+    async def resolve_manual_fault(self, route_id: str) -> dict:
+        """Resolve a manually injected fault and clear active alarms for that route."""
+        if route_id not in self.routes:
+            raise ValueError(f"Unknown route: {route_id}")
+
+        self.manual_faults.pop(route_id, None)
+
+        resolved_count = await self.ems_client.resolve_active_alarms_for_route(
+            route_id,
+            resolved_by="test-interface",
+            notes="Resolved from manual test interface",
+        )
+
+        await self.test_route(
+            route_id,
+            test_mode="ManualFaultResolution",
+            forced_fault="normal",
+            generate_alarm=False,
+        )
+
+        self.routes[route_id].current_status = TraceStatus.NORMAL
+        self.routes[route_id].active_alarms = 0
+
+        return {
+            "route_id": route_id,
+            "resolved_alarms": resolved_count,
+            "status": self.routes[route_id].current_status.value,
+        }
+
+    def _normalize_fault_type(self, fault_type: str) -> str:
+        value = (fault_type or "break").strip().lower()
+        aliases = {
+            "break": "break",
+            "fiber_break": "break",
+            "degradation": "degradation",
+            "degrade": "degradation",
+            "high_loss": "high_loss_splice",
+            "high_loss_splice": "high_loss_splice",
+            "normal": "normal",
+        }
+        return aliases.get(value, "break")
     
     def _select_fault_scenario(self) -> str:
         """
@@ -234,6 +327,9 @@ class MonitorService:
         Returns:
             Scenario type: 'normal', 'degradation', 'break', 'high_loss_splice'
         """
+        if not settings.auto_fault_generation:
+            return "normal"
+
         # Probability distribution (increased to ensure alarms every minute)
         # 40% normal, 30% degradation, 18% break, 12% high loss splice
         rand = random.random()
@@ -270,6 +366,7 @@ class MonitorService:
             "is_monitoring": self.is_running,
             "routes": [route.model_dump() for route in self.routes.values()],
             "alarms_sent_today": self.alarms_sent_today,
+            "manual_fault_routes": list(self.manual_faults.keys()),
             "power_supply": self.power_supply,
             "temperature_c": round(self.temperature_c, 2),
             "temperature_state": temperature_state,

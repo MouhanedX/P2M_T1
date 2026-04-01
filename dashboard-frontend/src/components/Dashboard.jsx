@@ -1,12 +1,11 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { kpisAPI, alarmsAPI, routesAPI, otdrAPI, rtusAPI } from '../services/api';
 import websocketService from '../services/websocket';
 import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
-import AlarmTimeline from './AlarmTimeline';
-import RealtimeChart from './RealtimeChart';
-import { AlertCircle, Activity, TrendingUp, Router, Wifi, WifiOff, Clock, ShieldCheck, Flame, GaugeCircle, BarChart3, Sparkles, Radar, ShieldAlert, ExternalLink } from 'lucide-react';
+import { AlertCircle, Activity, TrendingUp, Router, Wifi, WifiOff, ShieldCheck, GaugeCircle, Radar, ExternalLink } from 'lucide-react';
 
 const STANDALONE_TOPOLOGY = {
   central: {
@@ -59,17 +58,17 @@ const STANDALONE_TOPOLOGY = {
 };
 
 function Dashboard() {
-  const standaloneMapUrl = 'http://localhost:8090';
+  const navigate = useNavigate();
   const [kpi, setKpi] = useState(null);
   const [alarms, setAlarms] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(new Date());
   const [wsConnected, setWsConnected] = useState(false);
-  const [kpiHistory, setKpiHistory] = useState([]);
   const [activeView, setActiveView] = useState('noc');
   const [routes, setRoutes] = useState([]);
-  const [rtuStatus, setRtuStatus] = useState(null);
+  const [rtus, setRtus] = useState([]);
+  const [selectedRtuId, setSelectedRtuId] = useState('');
+  const [selectedRtuDetails, setSelectedRtuDetails] = useState(null);
   const [recentTests, setRecentTests] = useState([]);
 
   useEffect(() => {
@@ -98,7 +97,6 @@ function Dashboard() {
       kpiSub = websocketService.subscribe('/topic/kpis', (newKpi) => {
         console.log('New KPI received:', newKpi);
         setKpi(newKpi);
-        setLastUpdate(new Date());
         setWsConnected(true);
       });
     };
@@ -154,12 +152,6 @@ function Dashboard() {
     try {
       const response = await kpisAPI.getNetworkHealth();
       setKpi(response.data);
-      setKpiHistory(prev => [...prev.slice(-19), { 
-        timestamp: new Date(), 
-        availability: response.data.metrics.networkAvailabilityPercent,
-        alarms: response.data.metrics.totalAlarmsActive
-      }]);
-      setLastUpdate(new Date());
     } catch (error) {
       console.error('Error loading KPI data:', error);
     }
@@ -192,21 +184,9 @@ function Dashboard() {
 
   const loadRoutes = async () => {
     try {
-      // Get all RTUs first
-      const rtusResponse = await rtusAPI.getAll();
-      const allRtus = Array.isArray(rtusResponse.data) ? rtusResponse.data : rtusResponse.data.value || [];
-      
-      // Fetch routes for each RTU from database
-      const allRoutes = [];
-      for (const rtu of allRtus) {
-        try {
-          const routesResponse = await rtusAPI.getRoutes(rtu.rtu_id);
-          const rtuRoutes = Array.isArray(routesResponse.data) ? routesResponse.data : routesResponse.data.routes || [];
-          allRoutes.push(...rtuRoutes);
-        } catch (err) {
-          console.error(`Error loading routes for RTU ${rtu.rtu_id}:`, err);
-        }
-      }
+      // Route inventory should come from EMS backend (single source of truth).
+      const response = await routesAPI.getAll();
+      const allRoutes = Array.isArray(response.data) ? response.data : response.data.value || [];
       setRoutes(allRoutes);
     } catch (error) {
       console.error('Error loading routes:', error);
@@ -218,11 +198,39 @@ function Dashboard() {
     try {
       // Get all RTUs from database
       const response = await rtusAPI.getAll();
-      const rtus = Array.isArray(response.data) ? response.data : response.data.value || [];
-      setRtuStatus(rtus);
+      const allRtus = Array.isArray(response.data) ? response.data : response.data.value || [];
+      setRtus(allRtus);
+
+      const preferredRtuId = selectedRtuId && allRtus.some((item) => item.rtu_id === selectedRtuId)
+        ? selectedRtuId
+        : allRtus[0]?.rtu_id || '';
+
+      if (preferredRtuId) {
+        setSelectedRtuId(preferredRtuId);
+        await loadSelectedRtuDetails(preferredRtuId);
+      } else {
+        setSelectedRtuId('');
+        setSelectedRtuDetails(null);
+      }
     } catch (error) {
       console.error('Error loading RTU status:', error);
-      setRtuStatus(null);
+      setRtus([]);
+      setSelectedRtuDetails(null);
+    }
+  };
+
+  const loadSelectedRtuDetails = async (rtuId) => {
+    try {
+      if (!rtuId) {
+        setSelectedRtuDetails(null);
+        return;
+      }
+
+      const response = await rtusAPI.getStatus(rtuId);
+      setSelectedRtuDetails(response.data || null);
+    } catch (error) {
+      console.error(`Error loading details for RTU ${rtuId}:`, error);
+      setSelectedRtuDetails(null);
     }
   };
 
@@ -257,28 +265,60 @@ function Dashboard() {
     backboneKm: STANDALONE_TOPOLOGY.backboneByRtu[rtu.id] || 0
   }));
   const totalStandaloneRoutes = Object.values(STANDALONE_TOPOLOGY.routesByRtu).reduce((sum, list) => sum + list.length, 0);
+  const onlineRtusCount = rtus.filter((item) => item.ems_connected).length;
+  const monitoredRtusCount = rtus.filter((item) => item.is_monitoring).length;
+  const averageRtuTemperature = rtus.length > 0
+    ? rtus.reduce((sum, item) => sum + (item.temperature_c || 0), 0) / rtus.length
+    : 0;
+  const totalRtuActiveAlarms = rtus.reduce((sum, item) => sum + (item.active_alarms || 0), 0);
+  const selectedRtuSummary = rtus.find((item) => item.rtu_id === selectedRtuId) || null;
+  const fallbackSelectedRoutes = routes
+    .filter((item) => item.rtuId === selectedRtuId)
+    .map((item) => ({
+      route_id: item.routeId,
+      current_status: item.status,
+      fiber_length_km: item?.fiberSpec?.lengthKm,
+      active_alarms: item?.currentCondition?.activeAlarms ?? 0
+    }));
+  const selectedRtuRoutes = selectedRtuDetails?.routes?.length
+    ? selectedRtuDetails.routes
+    : fallbackSelectedRoutes;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-indigo-50 to-cyan-50">
-      <div className="space-y-6 p-6">
-        <div className="card relative overflow-hidden bg-gradient-to-r from-slate-900 via-indigo-900 to-sky-900 text-white shadow-2xl">
-          <div className="absolute -right-16 -top-16 h-44 w-44 rounded-full bg-cyan-400/20 blur-2xl" />
-          <div className="absolute -left-20 -bottom-20 h-52 w-52 rounded-full bg-purple-500/20 blur-2xl" />
+    <div className="min-h-screen bg-white">
+      <div className="space-y-6 px-3 py-4 sm:px-5 lg:px-8">
+        <div className="sticky top-3 z-20 flex justify-center">
+          <div className="w-full rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur-sm">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {[
+                { id: 'noc', label: 'NOC Real-time', icon: Radar },
+                { id: 'rtus', label: 'RTUs', icon: Activity },
+                { id: 'network', label: 'Réseau Optique', icon: Router }
+              ].map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setActiveView(id)}
+                  className={`min-w-[170px] rounded-xl px-5 py-3 font-medium transition-all flex items-center justify-center space-x-2 ${
+                    activeView === id
+                      ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-300'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                  }`}
+                >
+                  <Icon className="w-5 h-5" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="card relative overflow-hidden bg-white text-slate-900 shadow-2xl">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-3xl font-bold flex items-center space-x-3">
                 <Radar className="w-8 h-8 animate-pulse" />
                 <span>Network Operations Center</span>
               </h2>
-              <p className="text-sm opacity-90 mt-2 flex items-center space-x-2">
-                <Clock className="w-4 h-4" />
-                <span>Last updated: {lastUpdate.toLocaleTimeString()} • Auto-refresh every 2 minutes</span>
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold"><Sparkles className="h-3.5 w-3.5" /> Creative UI</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold"><Router className="h-3.5 w-3.5" /> {routes.length} Routes</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold"><ShieldAlert className="h-3.5 w-3.5" /> {kpi?.metrics?.totalAlarmsActive || 0} Active Alarms</span>
-              </div>
             </div>
             <div className="flex items-center space-x-4">
               <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg backdrop-blur-sm ${wsConnected ? 'bg-green-500/80' : 'bg-red-500/80'} animate-pulse`}>
@@ -288,36 +328,12 @@ function Dashboard() {
                 </span>
               </div>
               <button
-                onClick={loadInitialData}
-                className="px-4 py-2 bg-white text-blue-600 rounded-lg font-medium hover:bg-gray-100 transition-all hover:scale-105 flex items-center space-x-2 shadow-lg"
+                onClick={() => navigate('/test')}
+                className="px-4 py-2 bg-amber-400 text-slate-900 rounded-lg font-semibold hover:bg-amber-300 transition-all hover:scale-105 flex items-center space-x-2 shadow-lg"
               >
-                <Activity className="w-4 h-4" />
-                <span>Refresh Now</span>
+                <span>Test</span>
               </button>
             </div>
-          </div>
-        </div>
-
-        <div className="card shadow-lg">
-          <div className="flex space-x-2 border-b border-gray-200">
-            {[
-              { id: 'noc', label: 'NOC Real-time', icon: Radar },
-              { id: 'network', label: 'Réseau Optique', icon: Router },
-              { id: 'quality', label: 'Qualité & Historique', icon: TrendingUp }
-            ].map(({ id, label, icon: Icon }) => (
-              <button
-                key={id}
-                onClick={() => setActiveView(id)}
-                className={`px-6 py-4 font-medium transition-all flex items-center space-x-2 ${
-                  activeView === id
-                    ? 'text-blue-600 border-b-4 border-blue-600 bg-blue-50'
-                    : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-                <span>{label}</span>
-              </button>
-            ))}
           </div>
         </div>
 
@@ -359,26 +375,26 @@ function Dashboard() {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
               <div className="card bg-gradient-to-br from-emerald-50 to-green-100">
                 <p className="text-xs font-semibold text-slate-600">RTU Status</p>
-                <p className="mt-2 text-2xl font-bold text-emerald-700">{rtuStatus?.ems_connected ? 'Online' : 'Offline'}</p>
+                <p className="mt-2 text-2xl font-bold text-emerald-700">{onlineRtusCount}/{rtus.length} Online</p>
               </div>
               <div className="card bg-gradient-to-br from-cyan-50 to-sky-100">
-                <p className="text-xs font-semibold text-slate-600">Power Supply</p>
-                <p className="mt-2 text-2xl font-bold text-sky-700">{rtuStatus?.power_supply || 'Normal'}</p>
+                <p className="text-xs font-semibold text-slate-600">Monitoring</p>
+                <p className="mt-2 text-2xl font-bold text-sky-700">{monitoredRtusCount}/{rtus.length} Running</p>
               </div>
               <div className="card bg-gradient-to-br from-amber-50 to-orange-100">
-                <p className="text-xs font-semibold text-slate-600">Temperature</p>
-                <p className="mt-2 text-2xl font-bold text-orange-700">{rtuStatus?.temperature_c?.toFixed?.(1) ?? '0.0'}°C</p>
+                <p className="text-xs font-semibold text-slate-600">Avg Temperature</p>
+                <p className="mt-2 text-2xl font-bold text-orange-700">{averageRtuTemperature.toFixed(1)}°C</p>
                 <div className="mt-3 h-2 w-full rounded-full bg-orange-200">
-                  <div className="h-2 rounded-full bg-orange-500" style={{ width: `${Math.min(100, Math.max(5, ((rtuStatus?.temperature_c || 0) / 70) * 100))}%` }} />
+                  <div className="h-2 rounded-full bg-orange-500" style={{ width: `${Math.min(100, Math.max(5, (averageRtuTemperature / 70) * 100))}%` }} />
                 </div>
               </div>
               <div className="card bg-gradient-to-br from-violet-50 to-purple-100">
-                <p className="text-xs font-semibold text-slate-600">Communication</p>
-                <p className="mt-2 text-2xl font-bold text-purple-700">{rtuStatus?.communication || 'Connected'}</p>
+                <p className="text-xs font-semibold text-slate-600">RTU Alarms</p>
+                <p className="mt-2 text-2xl font-bold text-purple-700">{totalRtuActiveAlarms}</p>
               </div>
               <div className="card bg-gradient-to-br from-blue-50 to-indigo-100">
-                <p className="text-xs font-semibold text-slate-600">OTDR Availability</p>
-                <p className="mt-2 text-2xl font-bold text-indigo-700">{rtuStatus?.otdr_availability || 'Ready'}</p>
+                <p className="text-xs font-semibold text-slate-600">Managed RTUs</p>
+                <p className="mt-2 text-2xl font-bold text-indigo-700">{rtus.length}</p>
               </div>
             </div>
 
@@ -447,6 +463,122 @@ function Dashboard() {
           </>
         )}
 
+        {activeView === 'rtus' && (
+          <>
+            <div className="card shadow-lg">
+              <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">RTUs Section</h3>
+                  <p className="text-sm text-slate-500">Select one RTU to inspect its live metrics and assigned routes.</p>
+                </div>
+                <div className="w-full md:w-96">
+                  <label htmlFor="rtuSelector" className="mb-1 block text-sm font-semibold text-slate-700">Choose RTU</label>
+                  <select
+                    id="rtuSelector"
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                    value={selectedRtuId}
+                    onChange={async (event) => {
+                      const nextRtuId = event.target.value;
+                      setSelectedRtuId(nextRtuId);
+                      await loadSelectedRtuDetails(nextRtuId);
+                    }}
+                  >
+                    {rtus.length === 0 && <option value="">No RTUs available</option>}
+                    {rtus.map((item) => (
+                      <option key={item.rtu_id} value={item.rtu_id}>{item.rtu_id}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className="card bg-gradient-to-br from-emerald-50 to-green-100">
+                <p className="text-xs font-semibold text-slate-600">RTU Status</p>
+                <p className={`mt-2 text-2xl font-bold ${selectedRtuSummary?.ems_connected ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {selectedRtuSummary?.ems_connected ? 'Online' : 'Offline'}
+                </p>
+              </div>
+
+              <div className="card bg-gradient-to-br from-cyan-50 to-sky-100">
+                <p className="text-xs font-semibold text-slate-600">Monitoring</p>
+                <p className={`mt-2 text-2xl font-bold ${selectedRtuSummary?.is_monitoring ? 'text-sky-700' : 'text-slate-700'}`}>
+                  {selectedRtuSummary?.is_monitoring ? 'Running' : 'Stopped'}
+                </p>
+              </div>
+
+              <div className="card bg-gradient-to-br from-amber-50 to-orange-100">
+                <p className="text-xs font-semibold text-slate-600">Temperature</p>
+                <p className="mt-2 text-2xl font-bold text-orange-700">{selectedRtuSummary?.temperature_c?.toFixed?.(1) ?? '0.0'}°C</p>
+              </div>
+
+              <div className="card bg-gradient-to-br from-violet-50 to-purple-100">
+                <p className="text-xs font-semibold text-slate-600">Routes</p>
+                <p className="mt-2 text-2xl font-bold text-purple-700">{selectedRtuSummary?.routes_count ?? selectedRtuRoutes.length}</p>
+              </div>
+
+              <div className="card bg-gradient-to-br from-blue-50 to-indigo-100">
+                <p className="text-xs font-semibold text-slate-600">Active Alarms</p>
+                <p className="mt-2 text-2xl font-bold text-indigo-700">{selectedRtuSummary?.active_alarms ?? 0}</p>
+              </div>
+            </div>
+
+            <div className="card shadow-lg">
+              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
+                <Router className="w-5 h-5 text-indigo-600" />
+                <span>Routes in {selectedRtuId || 'Selected RTU'}</span>
+              </h3>
+
+              {selectedRtuRoutes.length === 0 ? (
+                <p className="text-sm text-gray-500">No route data available for this RTU.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-slate-200">
+                        <th className="pb-2 pr-3">Route</th>
+                        <th className="pb-2 pr-3">Status</th>
+                        <th className="pb-2 pr-3">Fiber Length</th>
+                        <th className="pb-2">Active Alarms</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedRtuRoutes.map((route) => (
+                        <tr key={route.route_id || route.routeId} className="border-b border-slate-100">
+                          <td className="py-2 pr-3 font-medium text-slate-700">{route.route_id || route.routeId}</td>
+                          <td className="py-2 pr-3 text-slate-600">{route.current_status?.toString?.() || route.status || 'UNKNOWN'}</td>
+                          <td className="py-2 pr-3 text-slate-600">{route.fiber_length_km ?? route?.fiberSpec?.lengthKm ?? '-'} km</td>
+                          <td className="py-2 text-slate-600">{route.active_alarms ?? route?.currentCondition?.activeAlarms ?? 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {selectedRtuDetails && (
+              <div className="card shadow-lg">
+                <h3 className="text-lg font-semibold mb-4">Additional RTU Metrics</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Power Supply</p>
+                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.power_supply || 'Normal'}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold text-slate-500">Communication</p>
+                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.communication || 'Connected'}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold text-slate-500">OTDR Availability</p>
+                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.otdr_availability || 'Ready'}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {activeView === 'network' && (
           <>
             <div className="card shadow-lg">
@@ -456,9 +588,9 @@ function Dashboard() {
                   <span>Network Topology</span>
                 </h3>
                 <button
-                  onClick={() => window.open(standaloneMapUrl, '_blank', 'noopener,noreferrer')}
+                  onClick={() => window.open('http://localhost:8090', '_blank', 'noopener,noreferrer')}
                   className="flex items-center space-x-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors duration-200"
-                  title="Open full map in new window"
+                  title="Open standalone RTU map"
                 >
                   <span className="text-sm font-medium">Full Map</span>
                   <ExternalLink className="w-4 h-4" />
@@ -611,105 +743,6 @@ function Dashboard() {
           </>
         )}
 
-        {activeView === 'quality' && (
-          <>
-            <div className="card shadow-lg">
-              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
-                <TrendingUp className="w-5 h-5 text-green-600" />
-                <span>Real-time Network Performance</span>
-              </h3>
-              <p className="text-sm text-gray-600 mb-6">
-                📈 Live monitoring of network availability and active alarms over time
-              </p>
-              <RealtimeChart data={kpiHistory} />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="card bg-gradient-to-br from-green-50 to-emerald-100 shadow-lg hover:shadow-xl transition-shadow">
-                <h4 className="font-semibold text-gray-700 mb-2 flex items-center space-x-2">
-                  <Activity className="w-4 h-4 text-green-600" />
-                  <span>Uptime</span>
-                </h4>
-                <p className="text-4xl font-bold text-green-600">
-                  {kpi?.availability?.uptimePercent?.toFixed(1) || 0}%
-                </p>
-                <p className="text-sm text-gray-600 mt-2">Network uptime</p>
-              </div>
-
-              <div className="card bg-gradient-to-br from-blue-50 to-cyan-100 shadow-lg hover:shadow-xl transition-shadow">
-                <h4 className="font-semibold text-gray-700 mb-2 flex items-center space-x-2">
-                  <Clock className="w-4 h-4 text-blue-600" />
-                  <span>MTTR</span>
-                </h4>
-                <p className="text-4xl font-bold text-blue-600">
-                  {kpi?.availability?.mttrHours?.toFixed(1) || 0}h
-                </p>
-                <p className="text-sm text-gray-600 mt-2">Mean Time To Repair</p>
-              </div>
-
-              <div className="card bg-gradient-to-br from-purple-50 to-pink-100 shadow-lg hover:shadow-xl transition-shadow">
-                <h4 className="font-semibold text-gray-700 mb-2 flex items-center space-x-2">
-                  <TrendingUp className="w-4 h-4 text-purple-600" />
-                  <span>MTBF</span>
-                </h4>
-                <p className="text-4xl font-bold text-purple-600">
-                  {kpi?.availability?.mtbfHours?.toFixed(0) || 0}h
-                </p>
-                <p className="text-sm text-gray-600 mt-2">Mean Time Between Failures</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="card">
-                <p className="text-xs font-semibold text-slate-500">Hour-over-Hour</p>
-                <p className="mt-2 text-2xl font-bold text-slate-800">{kpi?.trend?.hourOverHourChangePercent?.toFixed?.(2) ?? 0}%</p>
-              </div>
-              <div className="card">
-                <p className="text-xs font-semibold text-slate-500">Day-over-Day</p>
-                <p className="mt-2 text-2xl font-bold text-slate-800">{kpi?.trend?.dayOverDayChangePercent?.toFixed?.(2) ?? 0}%</p>
-              </div>
-              <div className="card">
-                <p className="text-xs font-semibold text-slate-500">Week-over-Week</p>
-                <p className="mt-2 text-2xl font-bold text-slate-800">{kpi?.trend?.weekOverWeekChangePercent?.toFixed?.(2) ?? 0}%</p>
-              </div>
-            </div>
-
-            <div className="card shadow-lg">
-              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
-                <Flame className="w-5 h-5 text-rose-600" />
-                <span>Periodic Quality Report (Recent OTDR Runs)</span>
-              </h3>
-              <div className="max-h-72 overflow-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-slate-500">
-                      <th className="pb-2 pr-2">Timestamp</th>
-                      <th className="pb-2 pr-2">Route</th>
-                      <th className="pb-2 pr-2">Loss</th>
-                      <th className="pb-2 pr-2">Status</th>
-                      <th className="pb-2">Result</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentTests.map((test) => (
-                      <tr key={`quality-${test.id || `${test.routeId}-${test.measuredAt}`}`} className="border-t border-slate-100">
-                        <td className="py-2 pr-2 text-slate-500">{test.measuredAt ? new Date(test.measuredAt).toLocaleString() : '-'}</td>
-                        <td className="py-2 pr-2 font-medium text-slate-700">{test.routeId}</td>
-                        <td className="py-2 pr-2 text-slate-600">{test.totalLossDb?.toFixed?.(2) ?? '-'} dB</td>
-                        <td className="py-2 pr-2 text-slate-600">{test.status}</td>
-                        <td className="py-2">
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${test.testResult === 'Pass' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                            {test.testResult}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </>
-        )}
       </div>
     </div>
   );
