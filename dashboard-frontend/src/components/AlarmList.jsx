@@ -1,5 +1,4 @@
-import { formatDistanceToNow } from 'date-fns';
-import { AlertCircle, CheckCircle } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import { alarmsAPI } from '../services/api';
 import { useState } from 'react';
 import clsx from 'clsx';
@@ -59,30 +58,20 @@ function AlarmList({ alarms, onRefresh }) {
     return badges[severity] || 'badge';
   };
 
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'RESOLVED':
-        return <CheckCircle className="w-5 h-5 text-green-500" />;
-      default:
-        return <AlertCircle className="w-5 h-5 text-red-500" />;
-    }
-  };
-
-  const handleResolve = async (alarmId) => {
+  const handleAcknowledge = async (alarmId) => {
     if (!alarmId) {
-      console.warn('Cannot resolve alarm without an identifier');
+      console.warn('Cannot acknowledge alarm without an identifier');
       return;
     }
 
     setProcessing(alarmId);
     try {
-      await alarmsAPI.resolve(alarmId, {
-        resolvedBy: 'operator',
-        resolutionNotes: 'Resolved from dashboard'
+      await alarmsAPI.acknowledge(alarmId, {
+        acknowledgedBy: 'operator'
       });
       if (onRefresh) onRefresh();
     } catch (error) {
-      console.error('Error resolving alarm:', error);
+      console.error('Error acknowledging alarm:', error);
     } finally {
       setProcessing(null);
     }
@@ -90,39 +79,35 @@ function AlarmList({ alarms, onRefresh }) {
 
   if (alarms.length === 0) {
     return (
-      <div className="text-center py-12 text-gray-500">
-        <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-        <p className="text-lg font-medium">No active alarms</p>
-        <p className="text-sm">All systems operating normally</p>
+      <div className="flex justify-center">
+        <div className="text-center py-12 text-gray-500">
+          <AlertCircle className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+          <p className="text-lg font-medium">No active alarms</p>
+          <p className="text-sm">All systems operating normally</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-gray-200">
+    <div className="flex justify-center">
+      <table className="w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
           <tr>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Status
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
               Severity
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
               Route
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
               Type
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Description
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Created Date & Time
             </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Time
-            </th>
-            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Actions
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Acknowledge
             </th>
           </tr>
         </thead>
@@ -133,41 +118,42 @@ function AlarmList({ alarms, onRefresh }) {
             const alarmType = alarm.alarmType || alarm.alarm_type || '-';
             const createdAtValue = alarm.lifecycle?.createdAt ?? alarm.lifecycle?.created_at ?? alarm.updatedAt ?? alarm.updated_at;
             const createdAtDate = parseTimestamp(createdAtValue);
+            const lifecycle = alarm.lifecycle || {};
+            const acknowledged = Boolean(lifecycle.acknowledged);
+            const repairDuration = Number(lifecycle.repairDurationSeconds ?? lifecycle.repair_duration_seconds ?? 0);
+            const canAcknowledge = !acknowledged && repairDuration > 0;
 
             return (
               <tr key={alarmIdentifier || alarm.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 whitespace-nowrap">
-                  {getStatusIcon(alarm.status)}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-6 py-4 text-center">
                   <span className={clsx('badge', getSeverityBadge(alarm.severity))}>
                     {alarm.severity}
                   </span>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                <td className="px-6 py-4 text-center text-sm font-medium text-gray-900">
                   {routeId}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td className="px-6 py-4 text-center text-sm text-gray-500">
                   {alarmType}
                 </td>
-                <td className="px-6 py-4 text-sm text-gray-900 max-w-md truncate">
-                  {alarm.description}
+                <td className="px-6 py-4 text-center text-sm text-gray-500">
+                  {createdAtDate ? createdAtDate.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '-'}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                  {createdAtDate ? formatDistanceToNow(createdAtDate, { addSuffix: true }) : '-'}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
-                  {alarm.status === 'ACTIVE' && (
+                <td className="px-6 py-4 text-center text-sm text-gray-500">
+                  {acknowledged ? (
+                    <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
+                      Acknowledged
+                    </span>
+                  ) : canAcknowledge ? (
                     <button
-                      onClick={() => handleResolve(alarmIdentifier)}
-                      disabled={!alarmIdentifier || processing === alarmIdentifier}
-                      className="px-3 py-1 text-green-600 hover:text-green-800 hover:bg-green-50 font-medium disabled:opacity-50 rounded border border-green-300 hover:border-green-500"
+                      onClick={() => handleAcknowledge(alarmIdentifier)}
+                      disabled={processing === alarmIdentifier}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {processing === alarmIdentifier ? 'Processing...' : 'Resolve'}
+                      {processing === alarmIdentifier ? 'Acknowledging...' : 'Acknowledge'}
                     </button>
-                  )}
-                  {alarm.status === 'RESOLVED' && (
-                    <span className="px-3 py-1 text-green-600 font-medium">✓ Resolved</span>
+                  ) : (
+                    <span className="text-slate-400">-</span>
                   )}
                 </td>
               </tr>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Activity, AlertTriangle, Clock3, Play, RefreshCw, SlidersHorizontal, UserCheck, Wrench } from 'lucide-react';
 import { alarmsAPI, routesAPI, rtusAPI } from '../services/api';
@@ -14,6 +14,85 @@ const FAULT_CAUSES = [
   'POWER_EVENT',
   'UNKNOWN'
 ];
+
+const LAST_SELECTED_RTU_STORAGE_KEY = 'fibermaster.lastSelectedRtuId';
+const RTU_CONFIG_CACHE_STORAGE_KEY = 'fibermaster.rtuConfigCache';
+
+const getStoredRtuId = () => {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    return window.localStorage.getItem(LAST_SELECTED_RTU_STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+};
+
+const storeRtuId = (rtuId) => {
+  if (!rtuId || typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LAST_SELECTED_RTU_STORAGE_KEY, rtuId);
+  } catch {
+    // Ignore storage access errors.
+  }
+};
+
+const normalizeOtdrMode = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['auto', 'automatic', 'periodic'].includes(normalized) ? 'auto' : 'manual';
+};
+
+const readRtuConfigCache = () => {
+  if (typeof window === 'undefined') {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(RTU_CONFIG_CACHE_STORAGE_KEY);
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const getCachedRtuConfig = (rtuId) => {
+  if (!rtuId) {
+    return null;
+  }
+
+  const cache = readRtuConfigCache();
+  return cache[rtuId] || null;
+};
+
+const storeCachedRtuConfig = (rtuId, configPatch) => {
+  if (!rtuId || !configPatch || typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const cache = readRtuConfigCache();
+    const existing = cache[rtuId] || {};
+    cache[rtuId] = {
+      ...existing,
+      ...configPatch,
+      mode: normalizeOtdrMode(configPatch.mode ?? existing.mode),
+    };
+
+    window.localStorage.setItem(RTU_CONFIG_CACHE_STORAGE_KEY, JSON.stringify(cache));
+  } catch {
+    // Ignore storage access errors.
+  }
+};
 
 const parseTimestamp = (value) => {
   if (value === null || value === undefined) {
@@ -58,8 +137,9 @@ const formatCountdown = (targetDate) => {
   return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
 };
 
-function TestControlPage() {
+function TestControlPage({ configOnly = false }) {
   const navigate = useNavigate();
+  const latestConfigRequestRef = useRef(0);
   const [routes, setRoutes] = useState([]);
   const [activeAlarms, setActiveAlarms] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -71,8 +151,8 @@ function TestControlPage() {
     text: ''
   });
   const [lastManualTest, setLastManualTest] = useState(null);
-  const [form, setForm] = useState({
-    rtuId: '',
+  const [form, setForm] = useState(() => ({
+    rtuId: getStoredRtuId(),
     routeId: '',
     faultType: 'break',
     faultCause: 'FIBER_BREAK',
@@ -82,7 +162,7 @@ function TestControlPage() {
     repairDurationSeconds: '300',
     technicianName: 'field-team',
     description: ''
-  });
+  }));
   const [otdrConfig, setOtdrConfig] = useState({
     mode: 'manual',
     periodSeconds: 300,
@@ -118,25 +198,46 @@ function TestControlPage() {
       return;
     }
 
+    const requestId = ++latestConfigRequestRef.current;
+
     try {
       const response = await rtusAPI.getOtdrConfig(rtuId);
       const payload = response.data || {};
+      const mode = normalizeOtdrMode(payload.mode);
+      const nextAutoTestAt = payload.next_auto_test_at || null;
+
+      if (requestId !== latestConfigRequestRef.current) {
+        return;
+      }
 
       setOtdrConfig((prev) => ({
         ...prev,
-        mode: payload.mode === 'auto' ? 'auto' : 'manual',
+        mode,
         periodSeconds: payload.period_seconds || prev.periodSeconds || 300,
-        routeId: prev.routeId || defaultRouteId,
-        nextAutoTestAt: payload.next_auto_test_at || null
+        routeId: defaultRouteId || prev.routeId || '',
+        nextAutoTestAt
       }));
+
+      storeCachedRtuConfig(rtuId, {
+        mode,
+        periodSeconds: payload.period_seconds || 300,
+        routeId: defaultRouteId || '',
+        nextAutoTestAt,
+      });
     } catch (error) {
       console.error(`Failed to load OTDR config for ${rtuId}:`, error);
+      const cached = getCachedRtuConfig(rtuId);
+
+      if (requestId !== latestConfigRequestRef.current) {
+        return;
+      }
+
       setOtdrConfig((prev) => ({
         ...prev,
-        mode: 'manual',
-        periodSeconds: prev.periodSeconds || 300,
-        routeId: prev.routeId || defaultRouteId,
-        nextAutoTestAt: null
+        mode: normalizeOtdrMode(cached?.mode || prev.mode),
+        periodSeconds: cached?.periodSeconds || prev.periodSeconds || 300,
+        routeId: defaultRouteId || cached?.routeId || prev.routeId || '',
+        nextAutoTestAt: cached?.nextAutoTestAt || prev.nextAutoTestAt || null
       }));
     }
   };
@@ -159,7 +260,8 @@ function TestControlPage() {
       setActiveAlarms(alarms);
 
       if (allRoutes.length > 0) {
-        let selectedRtu = form.rtuId || allRoutes[0].rtuId;
+        const preferredRtuId = form.rtuId || getStoredRtuId();
+        let selectedRtu = preferredRtuId || allRoutes[0].rtuId;
         let routesForRtu = allRoutes.filter((route) => route.rtuId === selectedRtu);
 
         if (routesForRtu.length === 0) {
@@ -167,12 +269,20 @@ function TestControlPage() {
           routesForRtu = allRoutes.filter((route) => route.rtuId === selectedRtu);
         }
 
+        storeRtuId(selectedRtu);
+        const cachedConfig = getCachedRtuConfig(selectedRtu);
+        const cachedRouteStillExists = cachedConfig?.routeId
+          ? allRoutes.some((route) => route.routeId === cachedConfig.routeId && route.rtuId === selectedRtu)
+          : false;
+
         const selectedRouteStillExists = allRoutes.some(
           (route) => route.routeId === form.routeId && route.rtuId === selectedRtu
         );
         const defaultRouteId = selectedRouteStillExists
           ? form.routeId
-          : (routesForRtu[0]?.routeId || allRoutes[0]?.routeId || '');
+          : (cachedRouteStillExists
+            ? cachedConfig.routeId
+            : (routesForRtu[0]?.routeId || allRoutes[0]?.routeId || ''));
 
         setForm((prev) => ({
           ...prev,
@@ -182,7 +292,10 @@ function TestControlPage() {
 
         setOtdrConfig((prev) => ({
           ...prev,
-          routeId: prev.routeId || defaultRouteId
+          mode: normalizeOtdrMode(cachedConfig?.mode || prev.mode),
+          periodSeconds: cachedConfig?.periodSeconds || prev.periodSeconds,
+          routeId: cachedConfig?.routeId || defaultRouteId,
+          nextAutoTestAt: cachedConfig?.nextAutoTestAt || prev.nextAutoTestAt
         }));
 
         await loadOtdrConfig(selectedRtu, defaultRouteId);
@@ -192,7 +305,7 @@ function TestControlPage() {
       setFeedback((prev) => ({
         ...prev,
         type: 'error',
-        text: 'Impossible de charger les routes ou les alarmes actives.'
+        text: 'Unable to load routes or active alarms.'
       }));
     } finally {
       setLoading(false);
@@ -209,11 +322,21 @@ function TestControlPage() {
 
   const handleConfigChange = (field, value) => {
     setOtdrConfig((prev) => ({ ...prev, [field]: value }));
+
+    if (field === 'routeId' && form.rtuId) {
+      storeCachedRtuConfig(form.rtuId, { routeId: value });
+    }
   };
 
   const handleRtuChange = async (value) => {
-    const firstRoute = routes.find((route) => route.rtuId === value);
-    const routeId = firstRoute?.routeId || '';
+    storeRtuId(value);
+    const cachedConfig = getCachedRtuConfig(value);
+
+    const routeCandidates = routes.filter((route) => route.rtuId === value);
+    const hasCachedRoute = cachedConfig?.routeId
+      ? routeCandidates.some((route) => route.routeId === cachedConfig.routeId)
+      : false;
+    const routeId = hasCachedRoute ? cachedConfig.routeId : (routeCandidates[0]?.routeId || '');
 
     setForm((prev) => ({
       ...prev,
@@ -223,6 +346,8 @@ function TestControlPage() {
 
     setOtdrConfig((prev) => ({
       ...prev,
+      mode: normalizeOtdrMode(cachedConfig?.mode || prev.mode),
+      periodSeconds: cachedConfig?.periodSeconds || prev.periodSeconds,
       routeId
     }));
 
@@ -233,7 +358,7 @@ function TestControlPage() {
     if (!form.rtuId) {
       setFeedback({
         type: 'error',
-        text: 'Selectionnez un RTU avant de sauvegarder la configuration OTDR.'
+        text: 'Select an RTU before saving OTDR configuration.'
       });
       return;
     }
@@ -242,7 +367,7 @@ function TestControlPage() {
     if (!Number.isFinite(periodSeconds) || periodSeconds < 30) {
       setFeedback({
         type: 'error',
-        text: 'La periode OTDR doit etre un nombre >= 30 secondes.'
+        text: 'OTDR period must be a number >= 30 seconds.'
       });
       return;
     }
@@ -255,22 +380,35 @@ function TestControlPage() {
       });
       const payload = response.data || {};
 
-      setOtdrConfig((prev) => ({
-        ...prev,
-        mode: payload.mode === 'auto' ? 'auto' : 'manual',
-        periodSeconds: payload.period_seconds || periodSeconds,
-        nextAutoTestAt: payload.next_auto_test_at || null
-      }));
+      setOtdrConfig((prev) => {
+        const mode = normalizeOtdrMode(payload.mode);
+        const period = payload.period_seconds || periodSeconds;
+        const nextAutoTestAt = payload.next_auto_test_at || null;
+
+        storeCachedRtuConfig(form.rtuId, {
+          mode,
+          periodSeconds: period,
+          routeId: prev.routeId || form.routeId || '',
+          nextAutoTestAt,
+        });
+
+        return {
+          ...prev,
+          mode,
+          periodSeconds: period,
+          nextAutoTestAt
+        };
+      });
 
       setFeedback({
         type: 'success',
-        text: `Configuration OTDR enregistree: mode ${payload.mode || otdrConfig.mode}, periode ${payload.period_seconds || periodSeconds}s.`
+        text: `OTDR configuration saved: mode ${payload.mode || otdrConfig.mode}, period ${payload.period_seconds || periodSeconds}s.`
       });
     } catch (error) {
       console.error('Failed to update OTDR config:', error);
       setFeedback({
         type: 'error',
-        text: 'Echec de sauvegarde de la configuration OTDR.'
+        text: 'Failed to save OTDR configuration.'
       });
     } finally {
       setConfigSaving(false);
@@ -281,7 +419,7 @@ function TestControlPage() {
     if (!form.rtuId) {
       setFeedback({
         type: 'error',
-        text: 'Selectionnez un RTU avant de lancer un test manuel.'
+        text: 'Select an RTU before launching a manual test.'
       });
       return;
     }
@@ -290,7 +428,7 @@ function TestControlPage() {
     if (!routeId) {
       setFeedback({
         type: 'error',
-        text: 'Selectionnez une route pour le test manuel.'
+        text: 'Select a route for the manual test.'
       });
       return;
     }
@@ -307,7 +445,7 @@ function TestControlPage() {
 
       setFeedback({
         type: 'success',
-        text: `Test manuel termine sur ${routeId}. Fichiers: ${result.event_reference_file || 'N/A'} + ${result.measurement_reference_file || 'N/A'} | variation puissance: ${variationText}`
+        text: `Manual test completed on ${routeId}. Files: ${result.event_reference_file || 'N/A'} + ${result.measurement_reference_file || 'N/A'} | power variation: ${variationText}`
       });
 
       await loadData();
@@ -315,7 +453,7 @@ function TestControlPage() {
       console.error('Failed to launch manual test:', error);
       setFeedback({
         type: 'error',
-        text: 'Echec du lancement du test OTDR manuel.'
+        text: 'Failed to launch manual OTDR test.'
       });
     } finally {
       setManualTesting(false);
@@ -326,7 +464,7 @@ function TestControlPage() {
     if (!form.rtuId || !form.routeId) {
       setFeedback({
         type: 'error',
-        text: 'Selectionnez un RTU et une route avant de creer une alarme.'
+        text: 'Select an RTU and a route before creating an alarm.'
       });
       return;
     }
@@ -338,7 +476,7 @@ function TestControlPage() {
     if (!Number.isFinite(repairDurationSeconds) || repairDurationSeconds <= 0) {
       setFeedback({
         type: 'error',
-        text: 'La duree de reparation doit etre un nombre strictement positif (secondes).'
+        text: 'Repair duration must be a strictly positive number (seconds).'
       });
       return;
     }
@@ -346,7 +484,7 @@ function TestControlPage() {
     if (!Number.isFinite(attenuationDb) || attenuationDb <= 0) {
       setFeedback({
         type: 'error',
-        text: 'La valeur d attenuation doit etre un nombre strictement positif.'
+        text: 'Attenuation value must be a strictly positive number.'
       });
       return;
     }
@@ -354,7 +492,7 @@ function TestControlPage() {
     if (!Number.isFinite(faultLocationKm) || faultLocationKm < 0) {
       setFeedback({
         type: 'error',
-        text: 'La localisation (km) doit etre un nombre valide >= 0.'
+        text: 'Location (km) must be a valid number >= 0.'
       });
       return;
     }
@@ -381,13 +519,13 @@ function TestControlPage() {
 
       setFeedback({
         type: 'success',
-        text: `Alarme manuelle creee pour ${form.routeId}. Elle sera resolue automatiquement apres ${repairDurationSeconds}s.`
+        text: `Manual alarm created for ${form.routeId}. Auto-repair timer will start after acknowledgment.`
       });
     } catch (error) {
       console.error('Failed to create manual alarm:', error);
       setFeedback({
         type: 'error',
-        text: 'Echec de creation de l alarme manuelle.'
+        text: 'Failed to create manual alarm.'
       });
     } finally {
       setSubmitting(false);
@@ -404,34 +542,36 @@ function TestControlPage() {
 
   return (
     <div className="space-y-6">
-      <div className="card bg-gradient-to-r from-slate-900 via-blue-900 to-cyan-900 text-white">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-bold flex items-center gap-2">
-              <Wrench className="w-6 h-6" />
-              Interface Test Maintenance Manuelle
-            </h2>
-            <p className="mt-2 text-sm text-blue-100">
-              Aucune alarme automatique: creation manuelle, assignation technicien, resolution temporisee exacte.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate('/')}
-              className="px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 transition-colors"
-            >
-              Retour Dashboard
-            </button>
-            <button
-              onClick={loadData}
-              className="px-4 py-2 rounded-lg bg-white text-slate-900 font-semibold hover:bg-slate-100 transition-colors flex items-center gap-2"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Rafraichir
-            </button>
+      {!configOnly && (
+        <div className="card bg-gradient-to-r from-slate-900 via-blue-900 to-cyan-900 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold flex items-center gap-2">
+                <Wrench className="w-6 h-6" />
+                Manual Maintenance Test Interface
+              </h2>
+              <p className="mt-2 text-sm text-blue-100">
+                No automatic alarm flow: manual creation, technician assignment, exact timed resolution.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => navigate('/')}
+                className="px-4 py-2 rounded-lg bg-white/15 hover:bg-white/25 transition-colors"
+              >
+                Back to Dashboard
+              </button>
+              <button
+                onClick={loadData}
+                className="px-4 py-2 rounded-lg bg-white text-slate-900 font-semibold hover:bg-slate-100 transition-colors flex items-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {feedback?.type && (
         <div className={`card border ${feedback.type === 'success' ? 'border-emerald-300 bg-emerald-50' : 'border-red-300 bg-red-50'}`}>
@@ -444,110 +584,115 @@ function TestControlPage() {
       {loading ? (
         <div className="card">
           <p className="text-sm text-slate-600 flex items-center gap-2">
-            <Activity className="w-4 h-4 animate-spin" /> Chargement des routes...
+            <Activity className="w-4 h-4 animate-spin" /> Loading routes...
           </p>
         </div>
       ) : (
         <>
-          <div className="card space-y-4 border border-blue-200 bg-blue-50/40">
-            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-              <SlidersHorizontal className="w-5 h-5 text-blue-700" />
-              Config OTDR
-            </h3>
+          {configOnly && (
+            <div className="card space-y-4 border border-blue-200 bg-blue-50/40">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <SlidersHorizontal className="w-5 h-5 text-blue-700" />
+                Config OTDR
+              </h3>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>RTU</span>
-                <select
-                  value={form.rtuId}
-                  onChange={(e) => handleRtuChange(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                >
-                  {groupedRoutes.map(([rtuId]) => (
-                    <option key={rtuId} value={rtuId}>{rtuId}</option>
-                  ))}
-                </select>
-              </label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <label className="text-sm font-medium text-slate-700 space-y-1">
+                  <span>RTU</span>
+                  <select
+                    value={form.rtuId}
+                    onChange={(e) => handleRtuChange(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    {groupedRoutes.map(([rtuId]) => (
+                      <option key={rtuId} value={rtuId}>{rtuId}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-slate-500">Configuration is per RTU. Last selected RTU is remembered.</p>
+                </label>
 
-              <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Mode OTDR</span>
-                <select
-                  value={otdrConfig.mode}
-                  onChange={(e) => handleConfigChange('mode', e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                >
-                  <option value="manual">Manuel</option>
-                  <option value="auto">Auto</option>
-                </select>
-              </label>
+                <label className="text-sm font-medium text-slate-700 space-y-1">
+                  <span>Mode OTDR</span>
+                  <select
+                    value={otdrConfig.mode}
+                    onChange={(e) => handleConfigChange('mode', e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    <option value="manual">Manual</option>
+                    <option value="auto">Auto</option>
+                  </select>
+                </label>
 
-              <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Periode test auto (secondes)</span>
-                <input
-                  type="number"
-                  min="30"
-                  step="1"
-                  value={otdrConfig.periodSeconds}
-                  onChange={(e) => handleConfigChange('periodSeconds', e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                />
-              </label>
+                <label className="text-sm font-medium text-slate-700 space-y-1">
+                  <span>Auto test period (seconds)</span>
+                  <input
+                    type="number"
+                    min="30"
+                    step="1"
+                    value={otdrConfig.periodSeconds}
+                    onChange={(e) => handleConfigChange('periodSeconds', e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  />
+                </label>
 
-              <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Route test manuel</span>
-                <select
-                  value={otdrConfig.routeId || form.routeId}
-                  onChange={(e) => handleConfigChange('routeId', e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2"
-                >
-                  {selectedRtuRoutes.map((route) => (
-                    <option key={route.routeId} value={route.routeId}>{route.routeId}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                onClick={handleSaveOtdrConfig}
-                disabled={configSaving}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-white font-semibold hover:bg-blue-800 disabled:opacity-50"
-              >
-                <SlidersHorizontal className="w-4 h-4" />
-                {configSaving ? 'Sauvegarde...' : 'Sauvegarder Config'}
-              </button>
-
-              <button
-                onClick={handleLaunchManualTest}
-                disabled={manualTesting}
-                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50"
-              >
-                <Play className="w-4 h-4" />
-                {manualTesting ? 'Test en cours...' : 'Lancer Test Manuel'}
-              </button>
-
-              <span className="text-xs text-slate-600">
-                Prochain test auto: {nextAutoTestDate ? nextAutoTestDate.toLocaleString() : '-'}
-              </span>
-            </div>
-
-            {lastManualTest && (
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-                <p className="font-semibold">Dernier test manuel: {lastManualTest.route_id || '-'}</p>
-                <p>
-                  Fichiers reference: {lastManualTest.event_reference_file || '-'} + {lastManualTest.measurement_reference_file || '-'}
-                </p>
-                <p>
-                  Puissance moyenne: {typeof lastManualTest.average_power_db === 'number' ? `${lastManualTest.average_power_db.toFixed(3)} dB` : '-'}
-                  {' | '}
-                  Variation: {typeof lastManualTest.power_variation_db === 'number' ? `${lastManualTest.power_variation_db.toFixed(3)} dB` : '-'}
-                </p>
+                <label className="text-sm font-medium text-slate-700 space-y-1">
+                  <span>Manual test route</span>
+                  <select
+                    value={otdrConfig.routeId || form.routeId}
+                    onChange={(e) => handleConfigChange('routeId', e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2"
+                  >
+                    {selectedRtuRoutes.map((route) => (
+                      <option key={route.routeId} value={route.routeId}>{route.routeId}</option>
+                    ))}
+                  </select>
+                </label>
               </div>
-            )}
-          </div>
 
-          <div className="card space-y-4">
-            <h3 className="text-lg font-bold text-slate-800">Creation d alarme manuelle (OTDR)</h3>
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  onClick={handleSaveOtdrConfig}
+                  disabled={configSaving}
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2 text-white font-semibold hover:bg-blue-800 disabled:opacity-50"
+                >
+                  <SlidersHorizontal className="w-4 h-4" />
+                  {configSaving ? 'Saving...' : 'Save Config'}
+                </button>
+
+                <button
+                  onClick={handleLaunchManualTest}
+                  disabled={manualTesting}
+                  className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-white font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  <Play className="w-4 h-4" />
+                  {manualTesting ? 'Test running...' : 'Launch Manual Test'}
+                </button>
+
+                <span className="text-xs text-slate-600">
+                  Next auto test: {nextAutoTestDate ? nextAutoTestDate.toLocaleString() : '-'}
+                </span>
+              </div>
+
+              {lastManualTest && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                  <p className="font-semibold">Last manual test: {lastManualTest.route_id || '-'}</p>
+                  <p>
+                    Reference files: {lastManualTest.event_reference_file || '-'} + {lastManualTest.measurement_reference_file || '-'}
+                  </p>
+                  <p>
+                    Average power: {typeof lastManualTest.average_power_db === 'number' ? `${lastManualTest.average_power_db.toFixed(3)} dB` : '-'}
+                    {' | '}
+                    Variation: {typeof lastManualTest.power_variation_db === 'number' ? `${lastManualTest.power_variation_db.toFixed(3)} dB` : '-'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {!configOnly && (
+            <>
+              <div className="card space-y-4">
+                <h3 className="text-lg font-bold text-slate-800">Manual alarm creation (OTDR)</h3>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <label className="text-sm font-medium text-slate-700 space-y-1">
@@ -577,7 +722,7 @@ function TestControlPage() {
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Type d alarme</span>
+                <span>Alarm type</span>
                 <select
                   value={form.faultType}
                   onChange={(e) => handleChange('faultType', e.target.value)}
@@ -590,7 +735,7 @@ function TestControlPage() {
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Cause de panne</span>
+                <span>Fault cause</span>
                 <select
                   value={form.faultCause}
                   onChange={(e) => handleChange('faultCause', e.target.value)}
@@ -603,18 +748,18 @@ function TestControlPage() {
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Localisation precise (texte)</span>
+                <span>Precise location (text)</span>
                 <input
                   type="text"
                   value={form.faultLocationDescription}
                   onChange={(e) => handleChange('faultLocationDescription', e.target.value)}
-                  placeholder="Ex: chambre C12, segment nord"
+                  placeholder="e.g. chamber C12, north segment"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Localisation (km)</span>
+                <span>Location (km)</span>
                 <input
                   type="number"
                   min="0"
@@ -640,7 +785,7 @@ function TestControlPage() {
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1">
-                <span>Duree de reparation (secondes)</span>
+                <span>Repair duration (seconds)</span>
                 <input
                   type="number"
                   min="1"
@@ -652,45 +797,45 @@ function TestControlPage() {
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1 md:col-span-2">
-                <span>Technicien assigne</span>
+                <span>Assigned technician</span>
                 <input
                   type="text"
                   value={form.technicianName}
                   onChange={(e) => handleChange('technicianName', e.target.value)}
-                  placeholder="Nom du technicien ou equipe"
+                  placeholder="Technician or team name"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>
 
               <label className="text-sm font-medium text-slate-700 space-y-1 md:col-span-2">
-                <span>Description (optionnel)</span>
+                <span>Description (optional)</span>
                 <textarea
                   value={form.description}
                   onChange={(e) => handleChange('description', e.target.value)}
                   rows={3}
-                  placeholder="Description de la panne"
+                  placeholder="Fault description"
                   className="w-full rounded-lg border border-slate-300 px-3 py-2"
                 />
               </label>
             </div>
 
-            <button
-              onClick={handleCreateManualAlarm}
-              disabled={submitting}
-              className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
-            >
-              <UserCheck className="w-4 h-4" />
-              {submitting
-                ? 'Assignation en cours...'
-                : 'Assigner au technicien et lancer le timer de reparation'}
-            </button>
-          </div>
+                <button
+                  onClick={handleCreateManualAlarm}
+                  disabled={submitting}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-white font-semibold hover:bg-red-700 disabled:opacity-50"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  {submitting
+                    ? 'Creating alarm...'
+                    : 'Create Alarm'}
+                </button>
+              </div>
 
-          <div className="card">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Alarmes actives en cours de reparation</h3>
+              <div className="card">
+                <h3 className="text-lg font-bold text-slate-800 mb-4">Active alarms under repair</h3>
 
             {activeAlarms.length === 0 ? (
-              <p className="text-sm text-slate-600">Aucune alarme active.</p>
+              <p className="text-sm text-slate-600">No active alarm.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -699,9 +844,9 @@ function TestControlPage() {
                       <th className="pb-2 pr-4">RTU</th>
                       <th className="pb-2 pr-4">Route</th>
                       <th className="pb-2 pr-4">Cause</th>
-                      <th className="pb-2 pr-4">Debut</th>
-                      <th className="pb-2 pr-4">Fin prevue</th>
-                      <th className="pb-2">Compte a rebours</th>
+                      <th className="pb-2 pr-4">Start</th>
+                      <th className="pb-2 pr-4">Expected end</th>
+                      <th className="pb-2">Countdown</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -730,46 +875,48 @@ function TestControlPage() {
                 </table>
               </div>
             )}
-          </div>
+              </div>
 
-          <div className="card">
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Etat des routes</h3>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left text-slate-500 border-b border-slate-200">
-                    <th className="pb-2 pr-4">RTU</th>
-                    <th className="pb-2 pr-4">Route</th>
-                    <th className="pb-2 pr-4">Etat route</th>
-                    <th className="pb-2">Alarme active</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {routes.map((route) => {
-                    const hasActiveAlarm = activeRouteSet.has(route.routeId);
-                    return (
-                      <tr key={route.routeId} className="border-b border-slate-100">
-                        <td className="py-2 pr-4 text-slate-700">{route.rtuId}</td>
-                        <td className="py-2 pr-4 font-semibold text-slate-800">{route.routeId}</td>
-                        <td className="py-2 pr-4 text-slate-600">{route.status || 'UNKNOWN'}</td>
-                        <td className="py-2">
-                          {hasActiveAlarm ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700">
-                              <AlertTriangle className="w-3 h-3" /> ACTIVE
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
-                              NONE
-                            </span>
-                          )}
-                        </td>
+              <div className="card">
+                <h3 className="text-lg font-bold text-slate-800 mb-4">Route status</h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-slate-500 border-b border-slate-200">
+                        <th className="pb-2 pr-4">RTU</th>
+                        <th className="pb-2 pr-4">Route</th>
+                        <th className="pb-2 pr-4">Route status</th>
+                        <th className="pb-2">Active alarm</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                    </thead>
+                    <tbody>
+                      {routes.map((route) => {
+                        const hasActiveAlarm = activeRouteSet.has(route.routeId);
+                        return (
+                          <tr key={route.routeId} className="border-b border-slate-100">
+                            <td className="py-2 pr-4 text-slate-700">{route.rtuId}</td>
+                            <td className="py-2 pr-4 font-semibold text-slate-800">{route.routeId}</td>
+                            <td className="py-2 pr-4 text-slate-600">{route.status || 'UNKNOWN'}</td>
+                            <td className="py-2">
+                              {hasActiveAlarm ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700">
+                                  <AlertTriangle className="w-3 h-3" /> ACTIVE
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
+                                  NONE
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

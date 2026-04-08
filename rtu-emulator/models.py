@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from typing import List, Optional
 from enum import Enum
@@ -55,6 +57,7 @@ class OTDRTrace(BaseModel):
     measurement_reference_file: Optional[str] = None
     average_power_db: Optional[float] = None
     power_variation_db: Optional[float] = None
+    rtu_health: Optional[RtuHealth] = None
     
     class Config:
         json_schema_extra = {
@@ -98,8 +101,14 @@ class AlarmStatus(str, Enum):
     ACTIVE = "ACTIVE"
     ACKNOWLEDGED = "ACKNOWLEDGED"
     RESOLVED = "RESOLVED"
-    CLEARED = "CLEARED"
-    SUPPRESSED = "SUPPRESSED"
+
+
+class RtuHealth(BaseModel):
+    """RTU health metrics captured at test time."""
+    temperature_c: float = Field(..., description="RTU temperature in Celsius")
+    cpu_usage_percent: float = Field(..., description="CPU usage percentage")
+    memory_usage_percent: float = Field(..., description="Memory usage percentage")
+    power_supply_status: str = Field(default="NORMAL", description="Power supply status")
 
 
 class ServiceImpact(str, Enum):
@@ -358,6 +367,7 @@ class OTDRTestReport(BaseModel):
     measurement_reference_file: Optional[str] = None
     average_power_db: Optional[float] = None
     power_variation_db: Optional[float] = None
+    rtu_health: Optional[RtuHealth] = None
 
 
 class RTUStatus(BaseModel):

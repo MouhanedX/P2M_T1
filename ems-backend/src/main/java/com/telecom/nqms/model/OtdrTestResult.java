@@ -55,6 +55,20 @@ public class OtdrTestResult {
 
     private Instant measuredAt;
 
+    private RtuHealth rtuHealth;
+
     @CreatedDate
     private Instant createdAt;
+
+    // Nested class for RTU health metrics captured at test time
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RtuHealth {
+        private Double temperatureC;
+        private Double cpuUsagePercent;
+        private Double memoryUsagePercent;
+        private String powerSupplyStatus;
+    }
 }

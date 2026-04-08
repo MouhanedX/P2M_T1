@@ -50,6 +50,7 @@ export const alarmsAPI = {
   getByRoute: (routeId) => emsApi.get(`/alarms/route/${routeId}`),
   getByRtu: (rtuId) => emsApi.get(`/alarms/rtu/${rtuId}`),
   createManual: (payload) => emsApi.post('/alarms/manual', payload),
+  acknowledge: (id, data) => emsApi.post(`/alarms/${id}/acknowledge`, data),
   resolve: (id, data) => emsApi.post(`/alarms/${id}/resolve`, data),
   getStatistics: () => emsApi.get('/alarms/statistics')
 };
@@ -71,8 +72,19 @@ export const routesAPI = {
 
 // OTDR Tests API - From EMS Backend
 export const otdrAPI = {
-  getRecent: (limit = 20, routeId) =>
-    emsApi.get('/otdr-tests/recent', { params: { limit, routeId } })
+  getRecent: (limit = 20, routeId, rtuId) => {
+    const params = { limit };
+
+    if (routeId) {
+      params.routeId = routeId;
+    }
+
+    if (rtuId) {
+      params.rtuId = rtuId;
+    }
+
+    return emsApi.get('/otdr-tests/recent', { params });
+  }
 };
 
 export { emsApi, rtuApi };

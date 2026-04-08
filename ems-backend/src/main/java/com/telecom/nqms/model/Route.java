@@ -30,7 +30,7 @@ public class Route {
     @Id
     private String id;
     
-    @Indexed(name = "routeId", unique = true)
+    @Indexed(unique = true)
     private String routeId;
     
     private String routeName;

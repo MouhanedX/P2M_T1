@@ -92,6 +92,20 @@ public class AlarmController {
         Alarm alarm = alarmService.resolveAlarm(alarmId,resolvedBy, notes);
         return ResponseEntity.ok(alarm);
     }
+
+    @PostMapping("/{alarmId}/acknowledge")
+    @Operation(summary = "Acknowledge an alarm", description = "Acknowledge an active alarm and start auto-repair countdown from acknowledgment time")
+    public ResponseEntity<Alarm> acknowledgeAlarm(
+            @PathVariable String alarmId,
+            @RequestBody(required = false) Map<String, String> request) {
+
+        String acknowledgedBy = request != null
+                ? request.getOrDefault("acknowledgedBy", request.getOrDefault("acknowledged_by", "operator"))
+                : "operator";
+
+        Alarm alarm = alarmService.acknowledgeAlarm(alarmId, acknowledgedBy);
+        return ResponseEntity.ok(alarm);
+    }
     
     @GetMapping("/statistics")
     @Operation(summary = "Get alarm statistics")

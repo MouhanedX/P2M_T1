@@ -13,4 +13,8 @@ public interface OtdrTestResultRepository extends MongoRepository<OtdrTestResult
     List<OtdrTestResult> findByOrderByMeasuredAtDesc(Pageable pageable);
 
     List<OtdrTestResult> findByRouteIdOrderByMeasuredAtDesc(String routeId, Pageable pageable);
+
+    List<OtdrTestResult> findByRtuIdOrderByMeasuredAtDesc(String rtuId, Pageable pageable);
+
+    List<OtdrTestResult> findByRouteIdAndRtuIdOrderByMeasuredAtDesc(String routeId, String rtuId, Pageable pageable);
 }

@@ -6,7 +6,11 @@ import com.telecom.nqms.repository.OtdrTestResultRepository;
 import com.telecom.nqms.repository.RouteRepository;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -108,13 +112,29 @@ public class RouteController {
                 .averagePowerDb(request.averagePowerDb)
                 .powerVariationDb(request.powerVariationDb)
                 .measuredAt(request.measuredAt != null ? request.measuredAt : Instant.now())
+                .rtuHealth(mapRtuHealth(request.rtuHealth))
                 .build();
         testResultRepository.save(result);
 
         return ResponseEntity.ok(savedRoute);
     }
 
+    private static OtdrTestResult.RtuHealth mapRtuHealth(RouteTelemetryRequest.RtuHealthRequest healthRequest) {
+        if (healthRequest == null) {
+            return null;
+        }
+        return OtdrTestResult.RtuHealth.builder()
+                .temperatureC(healthRequest.temperatureC)
+                .cpuUsagePercent(healthRequest.cpuUsagePercent)
+                .memoryUsagePercent(healthRequest.memoryUsagePercent)
+                .powerSupplyStatus(healthRequest.powerSupplyStatus)
+                .build();
+    }
+
     @Data
+    @NoArgsConstructor  
+    @AllArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public static class RouteTelemetryRequest {
         private String routeId;
         private String rtuId;
@@ -132,5 +152,24 @@ public class RouteController {
         private String measurementReferenceFile;
         private Double averagePowerDb;
         private Double powerVariationDb;
+        private RtuHealthRequest rtuHealth;
+
+        @Data
+        @NoArgsConstructor
+        @AllArgsConstructor
+        @JsonIgnoreProperties(ignoreUnknown = true)
+        public static class RtuHealthRequest {
+            @JsonProperty("temperatureC")
+            private Double temperatureC;
+            
+            @JsonProperty("cpuUsagePercent")
+            private Double cpuUsagePercent;
+            
+            @JsonProperty("memoryUsagePercent")
+            private Double memoryUsagePercent;
+            
+            @JsonProperty("powerSupplyStatus")
+            private String powerSupplyStatus;
+        }
     }
 }

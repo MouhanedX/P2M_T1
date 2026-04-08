@@ -36,18 +36,16 @@ RTUS_DATA = [
             "wavelengths": [1310, 1550],
             "dynamicRangeDb": 40
         },
-        "health": {
-            "operationalStatus": "HEALTHY",
-            "temperature": 35.5,
-            "powerSupply": "Normal"
-        },
         "configuration": {
             "monitoringInterval": 60,
-            "autoStart": True
+            "alarmThresholdDegradation": 0.5,
+            "alarmThresholdBreak": 2.0
         },
         "statistics": {
-            "totalAlarms": 0,
-            "activeAlarms": 0
+            "totalTestsPerformed": 0,
+            "alarmsGeneratedToday": 0,
+            "alarmsGeneratedWeek": 0,
+            "alarmsGeneratedMonth": 0
         },
         "createdAt": datetime.utcnow()
     },
@@ -69,18 +67,16 @@ RTUS_DATA = [
             "wavelengths": [1310, 1550],
             "dynamicRangeDb": 40
         },
-        "health": {
-            "operationalStatus": "HEALTHY",
-            "temperature": 35.5,
-            "powerSupply": "Normal"
-        },
         "configuration": {
             "monitoringInterval": 60,
-            "autoStart": True
+            "alarmThresholdDegradation": 0.5,
+            "alarmThresholdBreak": 2.0
         },
         "statistics": {
-            "totalAlarms": 0,
-            "activeAlarms": 0
+            "totalTestsPerformed": 0,
+            "alarmsGeneratedToday": 0,
+            "alarmsGeneratedWeek": 0,
+            "alarmsGeneratedMonth": 0
         },
         "createdAt": datetime.utcnow()
     },
@@ -102,18 +98,16 @@ RTUS_DATA = [
             "wavelengths": [1310, 1550],
             "dynamicRangeDb": 40
         },
-        "health": {
-            "operationalStatus": "HEALTHY",
-            "temperature": 35.5,
-            "powerSupply": "Normal"
-        },
         "configuration": {
             "monitoringInterval": 60,
-            "autoStart": True
+            "alarmThresholdDegradation": 0.5,
+            "alarmThresholdBreak": 2.0
         },
         "statistics": {
-            "totalAlarms": 0,
-            "activeAlarms": 0
+            "totalTestsPerformed": 0,
+            "alarmsGeneratedToday": 0,
+            "alarmsGeneratedWeek": 0,
+            "alarmsGeneratedMonth": 0
         },
         "createdAt": datetime.utcnow()
     },
@@ -135,18 +129,16 @@ RTUS_DATA = [
             "wavelengths": [1310, 1550],
             "dynamicRangeDb": 40
         },
-        "health": {
-            "operationalStatus": "HEALTHY",
-            "temperature": 35.5,
-            "powerSupply": "Normal"
-        },
         "configuration": {
             "monitoringInterval": 60,
-            "autoStart": True
+            "alarmThresholdDegradation": 0.5,
+            "alarmThresholdBreak": 2.0
         },
         "statistics": {
-            "totalAlarms": 0,
-            "activeAlarms": 0
+            "totalTestsPerformed": 0,
+            "alarmsGeneratedToday": 0,
+            "alarmsGeneratedWeek": 0,
+            "alarmsGeneratedMonth": 0
         },
         "createdAt": datetime.utcnow()
     },
@@ -168,18 +160,16 @@ RTUS_DATA = [
             "wavelengths": [1310, 1550],
             "dynamicRangeDb": 40
         },
-        "health": {
-            "operationalStatus": "HEALTHY",
-            "temperature": 35.5,
-            "powerSupply": "Normal"
-        },
         "configuration": {
             "monitoringInterval": 60,
-            "autoStart": True
+            "alarmThresholdDegradation": 0.5,
+            "alarmThresholdBreak": 2.0
         },
         "statistics": {
-            "totalAlarms": 0,
-            "activeAlarms": 0
+            "totalTestsPerformed": 0,
+            "alarmsGeneratedToday": 0,
+            "alarmsGeneratedWeek": 0,
+            "alarmsGeneratedMonth": 0
         },
         "createdAt": datetime.utcnow()
     }
@@ -866,8 +856,10 @@ def seed_database():
             
             if 'capabilities' not in sample_rtu:
                 errors.append("❌ Missing capabilities object")
-            if 'health' not in sample_rtu:
-                errors.append("❌ Missing health object")
+            if 'configuration' not in sample_rtu:
+                errors.append("❌ Missing configuration object")
+            if 'statistics' not in sample_rtu:
+                errors.append("❌ Missing statistics object")
             
             if errors:
                 for error in errors:

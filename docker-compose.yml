@@ -4,7 +4,7 @@ services:
   # Local MongoDB
   mongodb:
     image: mongo:7.0
-    container_name: nqms-mongodb
+    container_name: fibermaster-mongodb
     restart: unless-stopped
     environment:
       MONGO_INITDB_DATABASE: nqms
@@ -13,7 +13,7 @@ services:
     volumes:
       - mongodb_data:/data/db
     networks:
-      - nqms-network
+      - fibermaster-network
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
       interval: 10s
@@ -25,7 +25,8 @@ services:
     build:
       context: ./rtu-emulator
       dockerfile: Dockerfile
-    container_name: nqms-rtu-emulator
+    image: fibermaster-rtu-emulator:latest
+    container_name: fibermaster-rtu-emulator
     environment:
       RTU_ID: RTU_01
       RTU_NAME: Remote Test Unit 01
@@ -36,7 +37,7 @@ services:
       AUTO_START: "false"
       AUTO_FAULT_GENERATION: "false"
       USE_DATABASE_RTU: "true"
-      MONGODB_URI: ${MONGODB_URI:-mongodb://mongodb:27017/nqms}
+      MONGODB_URI: ${MONGODB_URI}
       ALARM_THRESHOLD_DEGRADATION: 3.0
       ALARM_THRESHOLD_BREAK: 10.0
       EVENT_LOSS_THRESHOLD: 1.0
@@ -48,7 +49,7 @@ services:
     volumes:
       - ./Routes:/app/Routes:ro
     networks:
-      - nqms-network
+      - fibermaster-network
     depends_on:
       - mongodb
       - ems-backend
@@ -59,12 +60,13 @@ services:
     build:
       context: ./ems-backend
       dockerfile: Dockerfile
-    container_name: nqms-ems-backend
+    image: fibermaster-ems-backend:latest
+    container_name: fibermaster-ems-backend
     environment:
       # MongoDB Atlas connection string - REPLACE WITH YOUR ACTUAL URI
-      SPRING_DATA_MONGODB_URI: ${MONGODB_URI:-mongodb://localhost:27017/nqms}
+      SPRING_DATA_MONGODB_URI: ${MONGODB_URI}
       # Also expose MONGODB_URI env var so other services/scripts can use it
-      MONGODB_URI: ${MONGODB_URI:-mongodb://localhost:27017/nqms}
+      MONGODB_URI: ${MONGODB_URI}
       SPRING_DATA_MONGODB_DATABASE: nqms
       SERVER_PORT: 8080
       SPRING_APPLICATION_NAME: nqms-ems-backend
@@ -76,7 +78,7 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - nqms-network
+      - fibermaster-network
     depends_on:
       - mongodb
     restart: unless-stopped
@@ -92,11 +94,12 @@ services:
     build:
       context: ./dashboard-frontend
       dockerfile: Dockerfile
-    container_name: nqms-dashboard
+    image: fibermaster-dashboard:latest
+    container_name: fibermaster-dashboard
     ports:
       - "3000:80"
     networks:
-      - nqms-network
+      - fibermaster-network
     depends_on:
       - ems-backend
     restart: unless-stopped
@@ -109,13 +112,13 @@ services:
   # Standalone RTU Map (static app)
   standalone-rtu-map:
     image: nginx:alpine
-    container_name: nqms-standalone-rtu-map
+    container_name: fibermaster-standalone-rtu-map
     volumes:
       - ./standalone-rtu-map:/usr/share/nginx/html:ro
     ports:
       - "8090:80"
     networks:
-      - nqms-network
+      - fibermaster-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 -O /dev/null http://127.0.0.1/ || exit 1"]
@@ -124,7 +127,7 @@ services:
       retries: 3
 
 networks:
-  nqms-network:
+  fibermaster-network:
     driver: bridge
 
 volumes:

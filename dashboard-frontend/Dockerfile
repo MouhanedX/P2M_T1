@@ -20,6 +20,9 @@ FROM nginx:alpine
 # Copy built assets from build stage
 COPY --from=build /app/dist /usr/share/nginx/html
 
+# Copy logo from public folder
+COPY --from=build /app/public/FiberMaster_Logo.png /usr/share/nginx/html/FiberMaster_Logo.png
+
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 

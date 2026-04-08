@@ -36,6 +36,8 @@ class OtdrConfigUpdateRequest(BaseModel):
 async def initialize_rtu_monitors():
     """Initialize monitor services for all RTUs from database."""
     global monitor_services
+
+    monitor_services.clear()
     
     logger.info("Initializing RTU Emulator from database...")
     
@@ -49,9 +51,32 @@ async def initialize_rtu_monitors():
                 rtus = [{"rtuId": settings.rtu_id, "name": settings.rtu_name}]
             
             for rtu in rtus:
-                rtu_id = rtu.get("rtuId", rtu.get("id"))
+                rtu_id = (
+                    rtu.get("rtuId")
+                    or rtu.get("rtu_id")
+                    or rtu.get("id")
+                    or (str(rtu.get("_id")) if rtu.get("_id") is not None else None)
+                )
+
+                if rtu_id is None:
+                    logger.warning(f"Skipping RTU with missing identifier: {rtu}")
+                    continue
+
+                rtu_id = str(rtu_id).strip()
+                if not rtu_id:
+                    logger.warning(f"Skipping RTU with blank identifier: {rtu}")
+                    continue
+
+                if rtu_id in monitor_services:
+                    logger.warning(f"Duplicate RTU identifier '{rtu_id}' found in database, skipping duplicate entry")
+                    continue
+
                 logger.info(f"Initializing monitor for RTU: {rtu_id}")
                 monitor_services[rtu_id] = MonitorService(rtu_id)
+
+            if not monitor_services:
+                logger.warning("Database returned RTUs but none were valid, using fallback RTU from config")
+                monitor_services[settings.rtu_id] = MonitorService(settings.rtu_id)
         
         except Exception as e:
             logger.error(f"Error fetching RTUs from database: {e}")

@@ -23,13 +23,25 @@ public class OtdrTestController {
     @Operation(summary = "Get recent OTDR test results")
     public ResponseEntity<List<OtdrTestResult>> getRecentTests(
             @RequestParam(defaultValue = "20") int limit,
-            @RequestParam(required = false) String routeId) {
+            @RequestParam(required = false) String routeId,
+            @RequestParam(required = false) String rtuId) {
 
         int safeLimit = Math.max(1, Math.min(limit, 100));
         PageRequest pageable = PageRequest.of(0, safeLimit);
 
-        if (routeId != null && !routeId.isBlank()) {
+        boolean hasRouteFilter = routeId != null && !routeId.isBlank();
+        boolean hasRtuFilter = rtuId != null && !rtuId.isBlank();
+
+        if (hasRouteFilter && hasRtuFilter) {
+            return ResponseEntity.ok(testResultRepository.findByRouteIdAndRtuIdOrderByMeasuredAtDesc(routeId, rtuId, pageable));
+        }
+
+        if (hasRouteFilter) {
             return ResponseEntity.ok(testResultRepository.findByRouteIdOrderByMeasuredAtDesc(routeId, pageable));
+        }
+
+        if (hasRtuFilter) {
+            return ResponseEntity.ok(testResultRepository.findByRtuIdOrderByMeasuredAtDesc(rtuId, pageable));
         }
 
         return ResponseEntity.ok(testResultRepository.findByOrderByMeasuredAtDesc(pageable));

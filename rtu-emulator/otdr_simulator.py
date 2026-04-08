@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from config import settings
-from models import EventType, OTDREvent, OTDRTrace, TraceStatus
+from models import EventType, OTDREvent, OTDRTrace, TraceStatus, RtuHealth
 
 
 @dataclass
@@ -37,7 +37,11 @@ class OTDRSimulator:
         self.reference_root = self._resolve_reference_root()
         self.reference_index = self._discover_reference_files()
         self.reference_cache: Dict[str, RouteReferenceBundle] = {}
-        self.route_power_offsets_db: Dict[str, float] = {}
+        
+        # Temperature tracking for dynamic fluctuation
+        self.current_base_temp = round(random.uniform(30.0, 45.0), 1)  # Base temperature 30-45°C
+        self.cpu_usage = round(random.uniform(15.0, 35.0), 1)
+        self.memory_usage = round(random.uniform(35.0, 55.0), 1)
 
     def generate_trace(
         self,
@@ -89,6 +93,7 @@ class OTDRSimulator:
                 measurement_reference_file=reference.measurement_file.name,
                 average_power_db=round(average_power_db, 3),
                 power_variation_db=round(variation_db, 3),
+                rtu_health=self._generate_rtu_health(),
             )
 
         # Fallback: synthetic trace generation
@@ -121,6 +126,7 @@ class OTDRSimulator:
             measurement_duration_ms=random.randint(800, 1200),
             average_power_db=round(average_power_db, 3),
             power_variation_db=round(variation_db, 3),
+            rtu_health=self._generate_rtu_health(),
         )
 
     def _resolve_reference_root(self) -> Optional[Path]:
@@ -280,29 +286,15 @@ class OTDRSimulator:
         return random.uniform(float(settings.min_fiber_length), float(settings.max_fiber_length))
 
     def _next_average_power(self, route_id: str, baseline_power_db: float) -> Tuple[float, float]:
-        normalized_route_id = self._normalize_route_id(route_id)
-
         min_variation = min(settings.power_variation_min_db, settings.power_variation_max_db)
         max_variation = max(settings.power_variation_min_db, settings.power_variation_max_db)
-        step_db = random.uniform(min_variation, max_variation)
 
-        previous_offset = self.route_power_offsets_db.get(normalized_route_id)
-        if previous_offset is None:
-            direction = random.choice([-1.0, 1.0])
-            new_offset = direction * step_db
-            variation_db = step_db
-        else:
-            direction = random.choice([-1.0, 1.0])
-            new_offset = previous_offset + (direction * step_db)
+        # Keep each test referenced to the route baseline (no cumulative drift).
+        variation_db = random.uniform(min_variation, max_variation)
+        direction = random.choice([-1.0, 1.0])
+        current_offset_db = direction * variation_db
 
-            # Keep long-term drift bounded while preserving 0.1-0.3 dB change between tests.
-            if abs(new_offset) > 1.5:
-                new_offset = previous_offset - (direction * step_db)
-
-            variation_db = abs(new_offset - previous_offset)
-
-        self.route_power_offsets_db[normalized_route_id] = new_offset
-        return baseline_power_db + new_offset, variation_db
+        return baseline_power_db + current_offset_db, variation_db
 
     def _inject_fault_event(self, events: List[OTDREvent], fiber_length: float, fault_type: str):
         fault_distance = random.uniform(max(0.2, fiber_length * 0.2), max(0.3, fiber_length * 0.9))
@@ -437,6 +429,35 @@ class OTDRSimulator:
     @staticmethod
     def _normalize_route_id(route_id: str) -> str:
         return (route_id or "").strip().rstrip("_")
+
+    def _generate_rtu_health(self) -> RtuHealth:
+        """Generate RTU health metrics with realistic fluctuations."""
+        # Temperature fluctuation: ±2-3°C from base temperature
+        temp_fluctuation = random.uniform(-3.0, 2.5)
+        current_temp = round(self.current_base_temp + temp_fluctuation, 1)
+        
+        # Keep temperature within normal operating range (25-60°C)
+        current_temp = max(25.0, min(60.0, current_temp))
+        
+        # Update base temperature for next test (gradual drift)
+        self.current_base_temp = round(current_temp + random.uniform(-0.5, 0.5), 1)
+        
+        # CPU and Memory usage fluctuation
+        cpu_fluctuation = random.uniform(-2.0, 2.5)
+        self.cpu_usage = round(max(10.0, min(80.0, self.cpu_usage + cpu_fluctuation)), 1)
+        
+        mem_fluctuation = random.uniform(-2.0, 2.5)
+        self.memory_usage = round(max(20.0, min(90.0, self.memory_usage + mem_fluctuation)), 1)
+        
+        # Power supply status (mostly normal, rarely degraded)
+        power_status = "DEGRADED" if random.random() < 0.05 else "NORMAL"
+        
+        return RtuHealth(
+            temperature_c=current_temp,
+            cpu_usage_percent=self.cpu_usage,
+            memory_usage_percent=self.memory_usage,
+            power_supply_status=power_status
+        )
 
     @classmethod
     def get_route_config(cls, route_id: str) -> dict:

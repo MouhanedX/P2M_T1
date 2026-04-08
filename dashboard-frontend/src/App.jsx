@@ -13,6 +13,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('');
+  const [activeView, setActiveView] = useState('noc');
 
   const checkSession = useCallback(async () => {
     try {
@@ -106,7 +107,7 @@ function App() {
 
     return (
       <div className="min-h-screen bg-white">
-        <Header wsConnected={wsConnected} username={username} onLogout={handleLogout} />
+        <Header wsConnected={wsConnected} username={username} onLogout={handleLogout} activeView={activeView} setActiveView={setActiveView} />
         <main className="w-full px-3 sm:px-5 lg:px-8 py-5">
           {content}
         </main>
@@ -134,7 +135,8 @@ function App() {
             : <LoginPage onLoginSuccess={handleLoginSuccess} />
         }
       />
-      <Route path="/" element={renderProtectedPage(<Dashboard />)} />
+      <Route path="/" element={renderProtectedPage(<Dashboard activeView={activeView} setActiveView={setActiveView} />)} />
+      <Route path="/config" element={renderProtectedPage(<TestControlPage configOnly />)} />
       <Route path="/test" element={renderProtectedPage(<TestControlPage />)} />
       <Route path="*" element={<Navigate to={isAuthenticated ? '/' : '/login'} replace />} />
     </Routes>

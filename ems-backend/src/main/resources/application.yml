@@ -6,7 +6,7 @@ spring:
     mongodb:
       uri: ${MONGODB_URI:mongodb://mongodb:27017/nqms}
       database: nqms
-      auto-index-creation: true
+      auto-index-creation: false
       
   jackson:
     serialization:

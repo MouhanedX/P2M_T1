@@ -156,6 +156,15 @@ class EMSClient:
                     "averagePowerDb": report.average_power_db,
                     "powerVariationDb": report.power_variation_db,
                 }
+                
+                # Add RTU health metrics if available
+                if report.rtu_health:
+                    payload["rtuHealth"] = {
+                        "temperatureC": report.rtu_health.temperature_c,
+                        "cpuUsagePercent": report.rtu_health.cpu_usage_percent,
+                        "memoryUsagePercent": report.rtu_health.memory_usage_percent,
+                        "powerSupplyStatus": report.rtu_health.power_supply_status,
+                    }
                 response = await client.post(endpoint, json=payload, headers=self._auth_headers())
                 if response.status_code not in [200, 201]:
                     logger.warning(

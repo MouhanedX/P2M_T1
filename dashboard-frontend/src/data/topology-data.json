@@ -1,0 +1,166 @@
+{
+  "rtus": [
+    {
+      "id": "RTU_TN_01",
+      "name": "Tunis RTU",
+      "city": "Tunis",
+      "color": "#00d4aa",
+      "lat": 36.892388340093454,
+      "lng": 10.208442785262585
+    },
+    {
+      "id": "RTU_TN_02",
+      "name": "Kef RTU",
+      "city": "Kef",
+      "color": "#0084ff",
+      "lat": 36.16453974514943,
+      "lng": 8.703746814430998
+    },
+    {
+      "id": "RTU_TN_03",
+      "name": "Sidi Bouzid RTU",
+      "city": "Sidi Bouzid",
+      "color": "#00ff88",
+      "lat": 35.037454686321325,
+      "lng": 9.486028916209502
+    },
+    {
+      "id": "RTU_TN_04",
+      "name": "Kairouan RTU",
+      "city": "Kairouan",
+      "color": "#b500d8",
+      "lat": 35.680625546171335,
+      "lng": 10.09540541901131
+    },
+    {
+      "id": "RTU_TN_05",
+      "name": "Gafsa RTU",
+      "city": "Gafsa",
+      "color": "#e51837",
+      "lat": 34.428625020010145,
+      "lng": 8.7898838248927
+    }
+  ],
+  "routes": [
+    {
+      "id": "RTU_TN_02_R1",
+      "rtuId": "RTU_TN_02",
+      "to": "Route_1774203193124",
+      "distanceKm": 15,
+      "lat": 36.163644910757554,
+      "lng": 8.715141950986906
+    },
+    {
+      "id": "RTU_TN_02_R2",
+      "rtuId": "RTU_TN_02",
+      "to": "Route_1774202549425",
+      "distanceKm": 32,
+      "lat": 36.15685280521371,
+      "lng": 8.69294408869621
+    },
+    {
+      "id": "RTU_TN_02_R3",
+      "rtuId": "RTU_TN_02",
+      "to": "Route_1774203245714",
+      "distanceKm": 65,
+      "lat": 36.17843001694744,
+      "lng": 8.707374123466137
+    },
+    {
+      "id": "RTU_TN_04_R1",
+      "rtuId": "RTU_TN_04",
+      "to": "Route_1774203307894",
+      "distanceKm": 19,
+      "lat": 35.66849926373306,
+      "lng": 10.077536833961275
+    },
+    {
+      "id": "RTU_TN_04_R2",
+      "rtuId": "RTU_TN_04",
+      "to": "Route_1774203387450",
+      "distanceKm": 33,
+      "lat": 35.700119999836275,
+      "lng": 10.105705866920088
+    },
+    {
+      "id": "RTU_TN_04_R3",
+      "rtuId": "RTU_TN_04",
+      "to": "Route_1774203492192",
+      "distanceKm": 32,
+      "lat": 35.66639448975711,
+      "lng": 10.104065954778207
+    },
+    {
+      "id": "RTU_TN_03_R1",
+      "rtuId": "RTU_TN_03",
+      "to": "Route_1774203669254",
+      "distanceKm": 9,
+      "lat": 35.02437019191522,
+      "lng": 9.477437518329543
+    },
+    {
+      "id": "RTU_TN_03_R2",
+      "rtuId": "RTU_TN_03",
+      "to": "Route_1774203549628",
+      "distanceKm": 5,
+      "lat": 35.04390185543724,
+      "lng": 9.49767006720323
+    },
+    {
+      "id": "RTU_TN_03_R3",
+      "rtuId": "RTU_TN_03",
+      "to": "Route_1774203578126",
+      "distanceKm": 29,
+      "lat": 35.02858554965614,
+      "lng": 9.456240964057507
+    },
+    {
+      "id": "RTU_TN_05_R1",
+      "rtuId": "RTU_TN_05",
+      "to": "Route_1774203747539",
+      "distanceKm": 18,
+      "lat": 34.425365371777445,
+      "lng": 8.76662512632506
+    },
+    {
+      "id": "RTU_TN_05_R2",
+      "rtuId": "RTU_TN_05",
+      "to": "Route_1774203810867",
+      "distanceKm": 5,
+      "lat": 34.4180210196122,
+      "lng": 8.78964561464761
+    },
+    {
+      "id": "RTU_TN_05_R3",
+      "rtuId": "RTU_TN_05",
+      "to": "Route_1774203864615",
+      "distanceKm": 13,
+      "lat": 34.44586544096175,
+      "lng": 8.782165594460924
+    },
+    {
+      "id": "RTU_TN_01_R1",
+      "rtuId": "RTU_TN_01",
+      "to": "Route_1774204296494",
+      "distanceKm": 34,
+      "lat": 36.86398504767072,
+      "lng": 10.298565801103491
+    },
+    {
+      "id": "RTU_TN_01_R2",
+      "rtuId": "RTU_TN_01",
+      "to": "Route_1774204456490",
+      "distanceKm": 14,
+      "lat": 36.80020230805378,
+      "lng": 10.186388831584196
+    },
+    {
+      "id": "RTU_TN_01_R3",
+      "rtuId": "RTU_TN_01",
+      "to": "Route_1774204360105",
+      "distanceKm": 11,
+      "lat": 36.890033855015716,
+      "lng": 10.171990310834623
+    }
+  ]
+}

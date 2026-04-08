@@ -62,7 +62,22 @@ class MonitorService:
             db_routes = self.db_service.fetch_routes_for_rtu(self.rtu_id)
             
             for route_data in db_routes:
-                route_id = route_data.get("routeId", route_data.get("id"))
+                route_id = (
+                    route_data.get("routeId")
+                    or route_data.get("route_id")
+                    or route_data.get("id")
+                    or (str(route_data.get("_id")) if route_data.get("_id") is not None else None)
+                )
+
+                if route_id is None:
+                    logger.warning(f"Skipping route with missing identifier for RTU {self.rtu_id}: {route_data}")
+                    continue
+
+                route_id = str(route_id).strip()
+                if not route_id:
+                    logger.warning(f"Skipping route with blank identifier for RTU {self.rtu_id}: {route_data}")
+                    continue
+
                 distance_km = extract_distance_km(route_data)
                 
                 self.routes[route_id] = RouteInfo(
@@ -238,6 +253,7 @@ class MonitorService:
             measurement_reference_file=trace.measurement_reference_file,
             average_power_db=trace.average_power_db,
             power_variation_db=trace.power_variation_db,
+            rtu_health=trace.rtu_health,
         )
 
         await self.ems_client.send_test_report(test_report)

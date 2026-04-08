@@ -132,7 +132,7 @@ public class AlarmService {
             .assignedAt(assignedToTechnician ? startTime : null)
             .assignedBy(assignedToTechnician ? defaultIfBlank(request.getTechnicianName(), "field-technician") : null)
             .repairDurationSeconds(assignedToTechnician ? repairDurationSeconds : null)
-            .autoResolveAt(assignedToTechnician ? startTime.plusSeconds(repairDurationSeconds) : null)
+            .autoResolveAt(null)
             .acknowledged(false)
             .resolved(false)
             .escalated(false)
@@ -163,6 +163,51 @@ public class AlarmService {
         saveManualOtdrResult(created, request, startTime, normalizedFaultType);
         return created;
         }
+
+    /**
+     * Acknowledge an alarm and start the auto-repair countdown from now.
+     */
+    @Transactional
+    public Alarm acknowledgeAlarm(String alarmId, String acknowledgedBy) {
+        Alarm alarm = getAlarmById(alarmId);
+
+        if (alarm.getLifecycle() == null) {
+            alarm.setLifecycle(Alarm.Lifecycle.builder()
+                    .createdAt(Instant.now())
+                    .assignedToTechnician(false)
+                    .acknowledged(false)
+                    .resolved(false)
+                    .escalated(false)
+                    .escalationLevel(0)
+                    .build());
+        }
+
+        if (Boolean.TRUE.equals(alarm.getLifecycle().getResolved())) {
+            throw new RuntimeException("Cannot acknowledge a resolved alarm");
+        }
+
+        if (Boolean.TRUE.equals(alarm.getLifecycle().getAcknowledged())) {
+            return alarm;
+        }
+
+        Instant now = Instant.now();
+        alarm.getLifecycle().setAcknowledged(true);
+        alarm.getLifecycle().setAcknowledgedAt(now);
+        alarm.getLifecycle().setAcknowledgedBy(defaultIfBlank(acknowledgedBy, "operator"));
+
+        Long repairDurationSeconds = alarm.getLifecycle().getRepairDurationSeconds();
+        if (Boolean.TRUE.equals(alarm.getLifecycle().getAssignedToTechnician())
+                && repairDurationSeconds != null
+                && repairDurationSeconds > 0) {
+            alarm.getLifecycle().setAutoResolveAt(now.plusSeconds(repairDurationSeconds));
+        }
+
+        Alarm updated = alarmRepository.save(alarm);
+        sendAlarmNotification(updated);
+
+        log.info("Alarm acknowledged: {} by {}", alarmId, acknowledgedBy);
+        return updated;
+    }
     
     /**
      * Get alarm by ID

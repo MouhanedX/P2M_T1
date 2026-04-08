@@ -21,6 +21,7 @@ class MongoDBService:
     @contextmanager
     def get_connection(self):
         """Get MongoDB connection context manager."""
+        client = None
         try:
             client = MongoClient(self.mongodb_uri, serverSelectionTimeoutMS=5000)
             client.server_info()  # Test connection
@@ -36,8 +37,20 @@ class MongoDBService:
         """Fetch all RTUs from database."""
         try:
             with self.get_connection() as db:
-                rtus = list(db[self.rtu_collection].find({"status": "ACTIVE"}))
-                logger.info(f"Fetched {len(rtus)} active RTUs from database")
+                # Support both lifecycle styles used across environments.
+                rtus = list(
+                    db[self.rtu_collection].find({"status": {"$in": ["ACTIVE", "ONLINE"]}})
+                )
+
+                if not rtus:
+                    rtus = list(db[self.rtu_collection].find({}))
+                    logger.warning(
+                        "No ACTIVE/ONLINE RTUs found; falling back to all RTUs (%s)",
+                        len(rtus),
+                    )
+                else:
+                    logger.info("Fetched %s active/online RTUs from database", len(rtus))
+
                 return rtus
         except Exception as e:
             logger.error(f"Error fetching RTUs: {e}")
@@ -47,7 +60,13 @@ class MongoDBService:
         """Fetch a specific RTU by ID."""
         try:
             with self.get_connection() as db:
-                rtu = db[self.rtu_collection].find_one({"rtuId": rtu_id})
+                rtu = db[self.rtu_collection].find_one({
+                    "$or": [
+                        {"rtuId": rtu_id},
+                        {"rtu_id": rtu_id},
+                        {"id": rtu_id},
+                    ]
+                })
                 if rtu:
                     logger.info(f"Fetched RTU: {rtu_id}")
                 return rtu
@@ -60,7 +79,12 @@ class MongoDBService:
         try:
             with self.get_connection() as db:
                 # Route status is operational (NORMAL/DEGRADATION/BREAK...), not a lifecycle ACTIVE flag.
-                routes = list(db[self.route_collection].find({"rtuId": rtu_id}))
+                routes = list(db[self.route_collection].find({
+                    "$or": [
+                        {"rtuId": rtu_id},
+                        {"rtu_id": rtu_id},
+                    ]
+                }))
                 logger.info(f"Fetched {len(routes)} routes for RTU {rtu_id}")
                 return routes
         except Exception as e:
@@ -71,7 +95,13 @@ class MongoDBService:
         """Fetch a specific route by ID."""
         try:
             with self.get_connection() as db:
-                route = db[self.route_collection].find_one({"routeId": route_id})
+                route = db[self.route_collection].find_one({
+                    "$or": [
+                        {"routeId": route_id},
+                        {"route_id": route_id},
+                        {"id": route_id},
+                    ]
+                })
                 if route:
                     logger.info(f"Fetched Route: {route_id}")
                 return route

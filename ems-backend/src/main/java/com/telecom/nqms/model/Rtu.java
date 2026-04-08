@@ -36,8 +36,6 @@ public class Rtu {
     
     private Capabilities capabilities;
     
-    private Health health;
-    
     private Configuration configuration;
     
     private Statistics statistics;
@@ -76,17 +74,6 @@ public class Rtu {
         private Integer maxFiberLengthKm;
         private Integer[] wavelengths;
         private Integer dynamicRangeDb;
-    }
-    
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Health {
-        private Double cpuUsage;
-        private Double memoryUsage;
-        private Instant lastHeartbeat;
-        private Integer uptimeHours;
     }
     
     @Data

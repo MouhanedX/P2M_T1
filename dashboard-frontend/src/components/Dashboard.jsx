@@ -1,62 +1,14 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { kpisAPI, alarmsAPI, routesAPI, otdrAPI, rtusAPI } from '../services/api';
+import { kpisAPI, alarmsAPI, routesAPI, otdrAPI } from '../services/api';
 import websocketService from '../services/websocket';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import topologyData from '../data/topology-data.json';
 import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
-import { AlertCircle, Activity, Router, Wifi, WifiOff, ShieldCheck, GaugeCircle, Radar, ExternalLink, History, X } from 'lucide-react';
+import { AlertCircle, Activity, Router, Wifi, WifiOff, ShieldCheck, Radar, ExternalLink, History, X } from 'lucide-react';
 
-const STANDALONE_TOPOLOGY = {
-  central: {
-    id: 'NOC_TN_CENTRAL',
-    name: 'National NOC',
-    city: 'Tunis Central',
-    color: '#ff0a54'
-  },
-  rtus: [
-    { id: 'RTU_TN_01', name: 'Tunis Core RTU', city: 'Tunis', color: '#00d4aa' },
-    { id: 'RTU_TN_02', name: 'Kef Metro RTU', city: 'Kef', color: '#0084ff' },
-    { id: 'RTU_TN_03', name: 'Sidi Bouzid Hub RTU', city: 'Sidi Bouzid', color: '#00ff88' },
-    { id: 'RTU_TN_04', name: 'Kairouan Inland RTU', city: 'Kairouan', color: '#b500d8' },
-    { id: 'RTU_TN_05', name: 'Gafsa South RTU', city: 'Gafsa', color: '#ffb700' }
-  ],
-  routesByRtu: {
-    RTU_TN_01: [
-      { id: 'RTU_TN_01_R1', distanceKm: 10 },
-      { id: 'RTU_TN_01_R2', distanceKm: 4 },
-      { id: 'RTU_TN_01_R3', distanceKm: 11 }
-    ],
-    RTU_TN_02: [
-      { id: 'RTU_TN_02_R1', distanceKm: 2 },
-      { id: 'RTU_TN_02_R2', distanceKm: 1 },
-      { id: 'RTU_TN_02_R3', distanceKm: 2 }
-    ],
-    RTU_TN_03: [
-      { id: 'RTU_TN_03_R1', distanceKm: 1 },
-      { id: 'RTU_TN_03_R2', distanceKm: 3 },
-      { id: 'RTU_TN_03_R3', distanceKm: 2 }
-    ],
-    RTU_TN_04: [
-      { id: 'RTU_TN_04_R1', distanceKm: 3 },
-      { id: 'RTU_TN_04_R2', distanceKm: 3 },
-      { id: 'RTU_TN_04_R3', distanceKm: 2 }
-    ],
-    RTU_TN_05: [
-      { id: 'RTU_TN_05_R1', distanceKm: 3 },
-      { id: 'RTU_TN_05_R2', distanceKm: 2 },
-      { id: 'RTU_TN_05_R3', distanceKm: 2 }
-    ]
-  },
-  backboneByRtu: {
-    RTU_TN_01: 38,
-    RTU_TN_02: 170,
-    RTU_TN_03: 211,
-    RTU_TN_04: 135,
-    RTU_TN_05: 308
-  }
-};
+const TOPOLOGY_COLORS = ['#00d4aa', '#0084ff', '#00ff88', '#f97316', '#e11d48', '#a855f7', '#ffb700'];
 
 const parseTimestamp = (value) => {
   if (value === null || value === undefined) {
@@ -85,23 +37,56 @@ const parseTimestamp = (value) => {
   return null;
 };
 
-function Dashboard() {
-  const navigate = useNavigate();
+const extractRtuHealth = (test) => {
+  const rawHealth = test?.rtuHealth || test?.rtu_health;
+  if (!rawHealth || typeof rawHealth !== 'object') {
+    return null;
+  }
+
+  const temperatureC = rawHealth.temperatureC ?? rawHealth.temperature_c;
+  const cpuUsagePercent = rawHealth.cpuUsagePercent ?? rawHealth.cpu_usage_percent;
+  const memoryUsagePercent = rawHealth.memoryUsagePercent ?? rawHealth.memory_usage_percent;
+  const powerSupplyStatus = rawHealth.powerSupplyStatus ?? rawHealth.power_supply_status;
+
+  const hasAnyHealthValue = (
+    temperatureC !== null && temperatureC !== undefined
+  ) || (
+    cpuUsagePercent !== null && cpuUsagePercent !== undefined
+  ) || (
+    memoryUsagePercent !== null && memoryUsagePercent !== undefined
+  ) || (
+    powerSupplyStatus !== null && powerSupplyStatus !== undefined && powerSupplyStatus !== ''
+  );
+
+  if (!hasAnyHealthValue) {
+    return null;
+  }
+
+  return {
+    temperatureC,
+    cpuUsagePercent,
+    memoryUsagePercent,
+    powerSupplyStatus,
+  };
+};
+
+function Dashboard({ activeView, setActiveView }) {
   const [kpi, setKpi] = useState(null);
   const [alarms, setAlarms] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [wsConnected, setWsConnected] = useState(false);
-  const [activeView, setActiveView] = useState('noc');
   const [routes, setRoutes] = useState([]);
   const [rtus, setRtus] = useState([]);
   const [selectedRtuId, setSelectedRtuId] = useState('');
-  const [selectedRtuDetails, setSelectedRtuDetails] = useState(null);
+  const [selectedRtuHealth, setSelectedRtuHealth] = useState(null);
+  const [selectedRtuHealthLoading, setSelectedRtuHealthLoading] = useState(false);
   const [recentTests, setRecentTests] = useState([]);
   const [selectedRouteHistory, setSelectedRouteHistory] = useState(null);
-  const [routeHistoryAlarms, setRouteHistoryAlarms] = useState([]);
   const [routeHistoryTests, setRouteHistoryTests] = useState([]);
   const [routeHistoryLoading, setRouteHistoryLoading] = useState(false);
+  const [routeHistoryGrouping, setRouteHistoryGrouping] = useState('sample');
+  const [selectedTopologyRtuId, setSelectedTopologyRtuId] = useState('');
 
   useEffect(() => {
     loadInitialData();
@@ -149,7 +134,6 @@ function Dashboard() {
       loadAlarmStatistics();
       loadActiveAlarms();
       loadRoutes();
-      loadRtuStatus();
       loadRecentTests();
       setWsConnected(websocketService.isConnected());
     }, 120000);
@@ -170,7 +154,6 @@ function Dashboard() {
         loadActiveAlarms(),
         loadAlarmStatistics(),
         loadRoutes(),
-        loadRtuStatus(),
         loadRecentTests()
       ]);
     } catch (error) {
@@ -214,62 +197,77 @@ function Dashboard() {
     }
   };
 
+  const normalizeList = (payload) => (Array.isArray(payload) ? payload : payload?.value || []);
+
+  const loadSelectedRtuHealth = async (rtuId) => {
+    if (!rtuId) {
+      setSelectedRtuHealth(null);
+      return;
+    }
+
+    setSelectedRtuHealthLoading(true);
+    try {
+      // Fetch a larger window and use the most recent sample that actually carries RTU health values.
+      const response = await otdrAPI.getRecent(100, undefined, rtuId);
+      const tests = normalizeList(response.data);
+      const latestHealthTest = tests.find((test) => extractRtuHealth(test));
+
+      if (latestHealthTest) {
+        const normalizedHealth = extractRtuHealth(latestHealthTest);
+        setSelectedRtuHealth({
+          ...normalizedHealth,
+          measuredAt: latestHealthTest.measuredAt || latestHealthTest.measured_at,
+          routeId: latestHealthTest.routeId || latestHealthTest.route_id,
+        });
+      } else {
+        setSelectedRtuHealth(null);
+      }
+    } catch (error) {
+      console.error(`Error loading latest OTDR health for RTU ${rtuId}:`, error);
+      setSelectedRtuHealth(null);
+    } finally {
+      setSelectedRtuHealthLoading(false);
+    }
+  };
+
   const loadRoutes = async () => {
     try {
-      // Route inventory should come from EMS backend (single source of truth).
       const response = await routesAPI.getAll();
-      const allRoutes = Array.isArray(response.data) ? response.data : response.data.value || [];
+      const allRoutes = normalizeList(response.data);
       setRoutes(allRoutes);
+
+      const uniqueRtuIds = [...new Set(allRoutes.map((route) => route.rtuId).filter(Boolean))].sort();
+      const dbRtus = uniqueRtuIds.map((rtuId) => ({
+        rtuId,
+        routesCount: allRoutes.filter((route) => route.rtuId === rtuId).length,
+      }));
+      setRtus(dbRtus);
+
+      const preferredRtuId = selectedRtuId && uniqueRtuIds.includes(selectedRtuId)
+        ? selectedRtuId
+        : uniqueRtuIds[0] || '';
+
+      if (preferredRtuId) {
+        if (preferredRtuId !== selectedRtuId) {
+          setSelectedRtuId(preferredRtuId);
+        }
+        await loadSelectedRtuHealth(preferredRtuId);
+      } else {
+        setSelectedRtuId('');
+        setSelectedRtuHealth(null);
+      }
     } catch (error) {
       console.error('Error loading routes:', error);
       setRoutes([]);
-    }
-  };
-
-  const loadRtuStatus = async () => {
-    try {
-      // Get all RTUs from database
-      const response = await rtusAPI.getAll();
-      const allRtus = Array.isArray(response.data) ? response.data : response.data.value || [];
-      setRtus(allRtus);
-
-      const preferredRtuId = selectedRtuId && allRtus.some((item) => item.rtu_id === selectedRtuId)
-        ? selectedRtuId
-        : allRtus[0]?.rtu_id || '';
-
-      if (preferredRtuId) {
-        setSelectedRtuId(preferredRtuId);
-        await loadSelectedRtuDetails(preferredRtuId);
-      } else {
-        setSelectedRtuId('');
-        setSelectedRtuDetails(null);
-      }
-    } catch (error) {
-      console.error('Error loading RTU status:', error);
       setRtus([]);
-      setSelectedRtuDetails(null);
-    }
-  };
-
-  const loadSelectedRtuDetails = async (rtuId) => {
-    try {
-      if (!rtuId) {
-        setSelectedRtuDetails(null);
-        return;
-      }
-
-      const response = await rtusAPI.getStatus(rtuId);
-      setSelectedRtuDetails(response.data || null);
-    } catch (error) {
-      console.error(`Error loading details for RTU ${rtuId}:`, error);
-      setSelectedRtuDetails(null);
+      setSelectedRtuHealth(null);
     }
   };
 
   const loadRecentTests = async () => {
     try {
       const response = await otdrAPI.getRecent(15);
-      setRecentTests(response.data || []);
+      setRecentTests(normalizeList(response.data));
     } catch (error) {
       console.error('Error loading OTDR tests:', error);
       setRecentTests([]);
@@ -279,19 +277,13 @@ function Dashboard() {
   const openRouteHistory = async (route) => {
     setSelectedRouteHistory(route);
     setRouteHistoryLoading(true);
-    setRouteHistoryAlarms([]);
     setRouteHistoryTests([]);
+    setRouteHistoryGrouping('sample');
     try {
-      const [alarmsResponse, testsResponse] = await Promise.all([
-        alarmsAPI.getByRoute(route.routeId),
-        otdrAPI.getRecent(40, route.routeId)
-      ]);
-
-      setRouteHistoryAlarms(Array.isArray(alarmsResponse.data) ? alarmsResponse.data : []);
-      setRouteHistoryTests(Array.isArray(testsResponse.data) ? testsResponse.data : []);
+      const testsResponse = await otdrAPI.getRecent(300, route.routeId, route.rtuId);
+      setRouteHistoryTests(normalizeList(testsResponse.data));
     } catch (error) {
-      console.error(`Error loading alarm history for route ${route.routeId}:`, error);
-      setRouteHistoryAlarms([]);
+      console.error(`Error loading OTDR history for route ${route.routeId}:`, error);
       setRouteHistoryTests([]);
     } finally {
       setRouteHistoryLoading(false);
@@ -300,49 +292,118 @@ function Dashboard() {
 
   const closeRouteHistory = () => {
     setSelectedRouteHistory(null);
-    setRouteHistoryAlarms([]);
     setRouteHistoryTests([]);
     setRouteHistoryLoading(false);
+    setRouteHistoryGrouping('sample');
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
+      <div className="flex min-h-screen items-center justify-center bg-white">
         <div className="text-center">
-          <div className="relative">
-            <div className="animate-spin rounded-full h-32 w-32 border-b-4 border-t-4 border-blue-600 mx-auto"></div>
-            <Activity className="w-12 h-12 text-blue-600 absolute top-10 left-10 animate-pulse" />
+          <div className="mx-auto mb-5 flex w-20 items-center justify-between">
+            <span className="h-3 w-3 rounded-full bg-blue-600 animate-pulse" style={{ animationDelay: '0ms' }} />
+            <span className="h-3 w-3 rounded-full bg-blue-600 animate-pulse" style={{ animationDelay: '160ms' }} />
+            <span className="h-3 w-3 rounded-full bg-blue-600 animate-pulse" style={{ animationDelay: '320ms' }} />
           </div>
-          <p className="text-xl font-bold text-gray-700 mt-6 animate-pulse">Loading NQMS Dashboard...</p>
-          <p className="text-sm text-gray-500 mt-2">Connecting to MongoDB Atlas...</p>
+          <p className="text-3xl font-bold tracking-tight text-slate-800">FiberMaster</p>
+          <p className="mt-2 text-sm text-slate-500">Loading dashboard...</p>
         </div>
       </div>
     );
   }
 
-  const topologyRtus = STANDALONE_TOPOLOGY.rtus.map((rtu) => ({
-    ...rtu,
-    routes: STANDALONE_TOPOLOGY.routesByRtu[rtu.id] || [],
-    backboneKm: STANDALONE_TOPOLOGY.backboneByRtu[rtu.id] || 0
-  }));
-  const totalStandaloneRoutes = Object.values(STANDALONE_TOPOLOGY.routesByRtu).reduce((sum, list) => sum + list.length, 0);
-  const averageRtuTemperature = rtus.length > 0
-    ? rtus.reduce((sum, item) => sum + (item.temperature_c || 0), 0) / rtus.length
+  const toNumericCoordinate = (value) => {
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : null;
+  };
+
+  const topologyRtuSource = topologyData?.rtus || [];
+  const topologyRouteSource = topologyData?.routes || [];
+
+  const topologyCoordinatePoints = [
+    ...topologyRtuSource.map((rtu) => ({
+      lat: toNumericCoordinate(rtu.lat),
+      lng: toNumericCoordinate(rtu.lng),
+    })),
+    ...topologyRouteSource.map((route) => ({
+      lat: toNumericCoordinate(route.lat),
+      lng: toNumericCoordinate(route.lng),
+    })),
+  ].filter((point) => point.lat !== null && point.lng !== null);
+
+  const hasTopologyCoordinates = topologyCoordinatePoints.length > 0;
+  const topologyLatMin = hasTopologyCoordinates
+    ? Math.min(...topologyCoordinatePoints.map((point) => point.lat))
     : 0;
-  const selectedRtuSummary = rtus.find((item) => item.rtu_id === selectedRtuId) || null;
-  const fallbackSelectedRoutes = routes
-    .filter((item) => item.rtuId === selectedRtuId)
-    .map((item) => ({
-      route_id: item.routeId,
-      current_status: item.status,
-      fiber_length_km: item?.fiberSpec?.lengthKm,
-      active_alarms: item?.currentCondition?.activeAlarms ?? 0
+  const topologyLatMax = hasTopologyCoordinates
+    ? Math.max(...topologyCoordinatePoints.map((point) => point.lat))
+    : 1;
+  const topologyLngMin = hasTopologyCoordinates
+    ? Math.min(...topologyCoordinatePoints.map((point) => point.lng))
+    : 0;
+  const topologyLngMax = hasTopologyCoordinates
+    ? Math.max(...topologyCoordinatePoints.map((point) => point.lng))
+    : 1;
+
+  const projectTopologyPoint = (latValue, lngValue) => {
+    const lat = toNumericCoordinate(latValue);
+    const lng = toNumericCoordinate(lngValue);
+
+    if (lat === null || lng === null || !hasTopologyCoordinates) {
+      return { x: 50, y: 50 };
+    }
+
+    const latitudeRange = topologyLatMax - topologyLatMin || 1;
+    const longitudeRange = topologyLngMax - topologyLngMin || 1;
+    const horizontalPadding = 8;
+    const verticalPadding = 10;
+
+    const normalizedX = (lng - topologyLngMin) / longitudeRange;
+    const normalizedY = (topologyLatMax - lat) / latitudeRange;
+
+    return {
+      x: horizontalPadding + (normalizedX * (100 - (2 * horizontalPadding))),
+      y: verticalPadding + (normalizedY * (100 - (2 * verticalPadding))),
+    };
+  };
+
+  const topologyRtus = topologyRtuSource.map((rtu, index) => {
+    const rtuPosition = projectTopologyPoint(rtu.lat, rtu.lng);
+    const rtuRoutes = topologyRouteSource
+      .filter((route) => route.rtuId === rtu.id)
+      .map((route) => ({
+        id: route.id,
+        distanceKm: Number(route.distanceKm) || 0,
+        lat: toNumericCoordinate(route.lat),
+        lng: toNumericCoordinate(route.lng),
+        position: projectTopologyPoint(route.lat, route.lng),
+      }));
+
+    return {
+      id: rtu.id,
+      name: rtu.name || rtu.id,
+      city: rtu.city || 'Unknown',
+      color: rtu.color || TOPOLOGY_COLORS[index % TOPOLOGY_COLORS.length],
+      lat: toNumericCoordinate(rtu.lat),
+      lng: toNumericCoordinate(rtu.lng),
+      position: rtuPosition,
+      routes: rtuRoutes,
+    };
+  });
+
+  const totalTopologyRoutes = topologyRouteSource.length;
+  const selectedTopologyRtu = topologyRtus.find((rtu) => rtu.id === selectedTopologyRtuId) || topologyRtus[0] || null;
+  const selectedTopologyRoutes = selectedTopologyRtu?.routes || [];
+  const selectedRtuRoutes = routes
+    .filter((route) => route.rtuId === selectedRtuId)
+    .map((route) => ({
+      routeId: route.routeId,
+      status: route.status,
+      fiberLengthKm: route?.fiberSpec?.lengthKm,
+      activeAlarms: route?.currentCondition?.activeAlarms ?? 0,
     }));
-  const selectedRtuRoutes = selectedRtuDetails?.routes?.length
-    ? selectedRtuDetails.routes
-    : fallbackSelectedRoutes;
-  const routePowerHistoryData = [...routeHistoryTests]
-    .filter((test) => typeof test.averagePowerDb === 'number')
+  const routeHistorySeriesSource = [...routeHistoryTests]
     .sort((a, b) => {
       const aTime = parseTimestamp(a.measuredAt)?.getTime() || 0;
       const bTime = parseTimestamp(b.measuredAt)?.getTime() || 0;
@@ -350,44 +411,93 @@ function Dashboard() {
     })
     .map((test, index) => {
       const measuredAt = parseTimestamp(test.measuredAt);
+      const year = measuredAt ? measuredAt.getFullYear() : null;
+      const month = measuredAt ? String(measuredAt.getMonth() + 1).padStart(2, '0') : null;
+      const day = measuredAt ? String(measuredAt.getDate()).padStart(2, '0') : null;
+
       return {
-        index: index + 1,
-        label: measuredAt ? measuredAt.toLocaleTimeString() : `T${index + 1}`,
-        power: Number(test.averagePowerDb.toFixed(3)),
+        sampleIndex: index + 1,
+        measuredAtMs: measuredAt?.getTime() || 0,
+        timestampText: measuredAt ? measuredAt.toLocaleString() : '-',
+        timeLabel: measuredAt
+          ? measuredAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          : `T${index + 1}`,
+        dayKey: measuredAt ? `${year}-${month}-${day}` : `day-${index + 1}`,
+        monthKey: measuredAt ? `${year}-${month}` : `month-${index + 1}`,
+        power: typeof test.averagePowerDb === 'number' ? Number(test.averagePowerDb.toFixed(3)) : null,
         variation: typeof test.powerVariationDb === 'number'
           ? Number(test.powerVariationDb.toFixed(3))
           : null,
       };
+    })
+    .filter((sample) => sample.power !== null || sample.variation !== null);
+
+  const aggregateRouteHistorySeries = (series, keyField) => {
+    const buckets = new Map();
+
+    series.forEach((sample) => {
+      const key = sample[keyField];
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          label: key,
+          powerSum: 0,
+          powerCount: 0,
+          variationSum: 0,
+          variationCount: 0,
+          lastTimestamp: sample.measuredAtMs,
+        });
+      }
+
+      const bucket = buckets.get(key);
+      bucket.lastTimestamp = Math.max(bucket.lastTimestamp, sample.measuredAtMs);
+
+      if (sample.power !== null) {
+        bucket.powerSum += sample.power;
+        bucket.powerCount += 1;
+      }
+
+      if (sample.variation !== null) {
+        bucket.variationSum += sample.variation;
+        bucket.variationCount += 1;
+      }
     });
+
+    return [...buckets.values()]
+      .sort((a, b) => a.lastTimestamp - b.lastTimestamp)
+      .map((bucket, index) => ({
+        index: index + 1,
+        label: bucket.label,
+        timestampText: '-',
+        power: bucket.powerCount > 0
+          ? Number((bucket.powerSum / bucket.powerCount).toFixed(3))
+          : null,
+        variation: bucket.variationCount > 0
+          ? Number((bucket.variationSum / bucket.variationCount).toFixed(3))
+          : null,
+      }));
+  };
+
+  const routePowerHistoryData = routeHistoryGrouping === 'day'
+    ? aggregateRouteHistorySeries(routeHistorySeriesSource, 'dayKey')
+    : routeHistoryGrouping === 'month'
+      ? aggregateRouteHistorySeries(routeHistorySeriesSource, 'monthKey')
+      : routeHistorySeriesSource.map((sample) => ({
+          index: sample.sampleIndex,
+          label: sample.timeLabel,
+          timestampText: sample.timestampText,
+          power: sample.power,
+          variation: sample.variation,
+        }));
+
+  const routeHistoryTableData = [...routeHistoryTests].sort((a, b) => {
+    const aTime = parseTimestamp(a.measuredAt)?.getTime() || 0;
+    const bTime = parseTimestamp(b.measuredAt)?.getTime() || 0;
+    return bTime - aTime;
+  });
 
   return (
     <div className="min-h-screen bg-white">
       <div className="space-y-6 px-3 py-4 sm:px-5 lg:px-8">
-        <div className="sticky top-3 z-20 flex justify-center">
-          <div className="w-full rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-lg backdrop-blur-sm">
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              {[
-                { id: 'noc', label: 'NOC Real-time', icon: Radar },
-                { id: 'rtus', label: 'RTUs', icon: Activity },
-                { id: 'network', label: 'Réseau Optique', icon: Router }
-              ].map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  onClick={() => setActiveView(id)}
-                  className={`min-w-[170px] rounded-xl px-5 py-3 font-medium transition-all flex items-center justify-center space-x-2 ${
-                    activeView === id
-                      ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-300'
-                      : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-                  }`}
-                >
-                  <Icon className="w-5 h-5" />
-                  <span>{label}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
         <div className="card relative overflow-hidden bg-white text-slate-900 shadow-2xl">
           <div className="flex items-center justify-between">
             <div>
@@ -403,12 +513,6 @@ function Dashboard() {
                   {wsConnected ? 'Live Connection' : 'Reconnecting...'}
                 </span>
               </div>
-              <button
-                onClick={() => navigate('/test')}
-                className="px-4 py-2 bg-amber-400 text-slate-900 rounded-lg font-semibold hover:bg-amber-300 transition-all hover:scale-105 flex items-center space-x-2 shadow-lg"
-              >
-                <span>Test</span>
-              </button>
             </div>
           </div>
         </div>
@@ -442,16 +546,6 @@ function Dashboard() {
 
         {activeView === 'noc' && (
           <>
-            <div className="grid grid-cols-1 gap-4">
-              <div className="card bg-gradient-to-br from-amber-50 to-orange-100">
-                <p className="text-xs font-semibold text-slate-600">Avg Temperature</p>
-                <p className="mt-2 text-2xl font-bold text-orange-700">{averageRtuTemperature.toFixed(1)}°C</p>
-                <div className="mt-3 h-2 w-full rounded-full bg-orange-200">
-                  <div className="h-2 rounded-full bg-orange-500" style={{ width: `${Math.min(100, Math.max(5, (averageRtuTemperature / 70) * 100))}%` }} />
-                </div>
-              </div>
-            </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="card shadow-lg hover:shadow-xl transition-shadow">
                 <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
@@ -467,11 +561,11 @@ function Dashboard() {
                   <span>Alarm Severity Breakdown</span>
                 </h3>
                 {stats && (
-                  <div className="space-y-4">
-                    <AlarmSeverityBar label="Critical" count={stats.critical} total={stats.total} color="bg-red-500" />
-                    <AlarmSeverityBar label="High" count={stats.high} total={stats.total} color="bg-orange-500" />
-                    <AlarmSeverityBar label="Medium" count={stats.medium} total={stats.total} color="bg-yellow-500" />
-                    <AlarmSeverityBar label="Low" count={stats.low} total={stats.total} color="bg-blue-500" />
+                  <div className="space-y-3">
+                    <AlarmSeverityBar label="Critical" count={stats.critical} color="text-white" bgColor="bg-red-600" />
+                    <AlarmSeverityBar label="High" count={stats.high} color="text-white" bgColor="bg-orange-600" />
+                    <AlarmSeverityBar label="Medium" count={stats.medium} color="text-white" bgColor="bg-yellow-600" />
+                    <AlarmSeverityBar label="Low" count={stats.low} color="text-white" bgColor="bg-blue-600" />
                   </div>
                 )}
               </div>
@@ -486,26 +580,33 @@ function Dashboard() {
                 <p className="text-sm text-gray-500">No routes loaded yet.</p>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {routes.map((route) => (
-                    <button
-                      type="button"
-                      key={route.routeId}
-                      onClick={() => openRouteHistory(route)}
-                      className="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-indigo-50 p-4 shadow-sm text-left transition-all hover:shadow-md hover:border-indigo-300"
-                    >
-                      <p className="text-xs font-semibold text-indigo-600">{route.routeId}</p>
-                      <p className="text-sm font-bold text-slate-900 mt-1">{route.routeName}</p>
-                      <p className="text-xs text-slate-500 mt-1">{route.region} • {route?.fiberSpec?.lengthKm ?? '-'} km</p>
-                      <div className="mt-3 flex items-center justify-between gap-2">
-                        <span className="inline-flex rounded-full bg-slate-900/5 px-2.5 py-1 text-xs font-medium text-slate-700">
-                          Status: {route.status}
-                        </span>
-                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700">
-                          <History className="w-3 h-3" /> History
-                        </span>
-                      </div>
-                    </button>
-                  ))}
+                  {routes.map((route) => {
+                    return (
+                      <button
+                        type="button"
+                        key={route.routeId}
+                        onClick={() => openRouteHistory(route)}
+                        className="rounded-xl border border-slate-200 bg-gradient-to-br from-white to-indigo-50 p-4 shadow-sm text-left transition-all hover:shadow-md hover:border-indigo-300"
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <p className="text-xs font-semibold text-indigo-600">{route.routeId}</p>
+                            <p className="text-sm font-bold text-slate-900 mt-1">{route.routeName}</p>
+                            <p className="text-xs text-slate-500 mt-1">{route.region} • {route?.fiberSpec?.lengthKm ?? '-'} km</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          <span className="inline-flex rounded-full bg-slate-900/5 px-2.5 py-1 text-xs font-medium text-slate-700">
+                            Status: {route.status}
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+                            <History className="w-3 h-3" /> History
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -515,7 +616,7 @@ function Dashboard() {
                 <div className="w-full max-w-6xl max-h-[85vh] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
                   <div className="border-b border-slate-200 px-5 py-4 flex items-center justify-between">
                     <div>
-                      <h4 className="text-lg font-bold text-slate-900">Route OTDR and Alarm History</h4>
+                      <h4 className="text-lg font-bold text-slate-900">Route OTDR History</h4>
                       <p className="text-sm text-slate-600 mt-1">
                         {selectedRouteHistory.routeId} • {selectedRouteHistory.routeName} • {selectedRouteHistory.rtuId}
                       </p>
@@ -535,12 +636,25 @@ function Dashboard() {
                       <div className="space-y-6">
                         <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
                           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                            <h5 className="text-sm font-bold text-indigo-900">Puissance Variation (dB)</h5>
-                            <span className="text-xs font-medium text-indigo-700">{routeHistoryTests.length} tests</span>
+                            <h5 className="text-sm font-bold text-indigo-900">Power (dB)</h5>
+                            <div className="flex items-center gap-2">
+                              <label htmlFor="routeHistoryGrouping" className="text-xs font-semibold text-indigo-800">Filter</label>
+                              <select
+                                id="routeHistoryGrouping"
+                                className="rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs font-medium text-indigo-800"
+                                value={routeHistoryGrouping}
+                                onChange={(event) => setRouteHistoryGrouping(event.target.value)}
+                              >
+                                <option value="sample">By test</option>
+                                <option value="day">By day</option>
+                                <option value="month">By month</option>
+                              </select>
+                              <span className="text-xs font-medium text-indigo-700">{routeHistoryTests.length} tests</span>
+                            </div>
                           </div>
 
                           {routePowerHistoryData.length === 0 ? (
-                            <p className="text-sm text-slate-600">No OTDR puissance history available for this route yet.</p>
+                            <p className="text-sm text-slate-600">No OTDR power history available for this route yet.</p>
                           ) : (
                             <div className="h-64">
                               <ResponsiveContainer width="100%" height="100%">
@@ -548,18 +662,23 @@ function Dashboard() {
                                   <CartesianGrid strokeDasharray="3 3" stroke="#cbd5e1" />
                                   <XAxis dataKey="label" stroke="#475569" tick={{ fontSize: 12 }} />
                                   <YAxis
-                                    dataKey="power"
                                     stroke="#1d4ed8"
                                     tick={{ fontSize: 12 }}
-                                    domain={['dataMin - 0.5', 'dataMax + 0.5']}
-                                    label={{ value: 'Puissance (dB)', angle: -90, position: 'insideLeft' }}
+                                    domain={['auto', 'auto']}
+                                    label={{ value: 'dB', angle: -90, position: 'insideLeft' }}
                                   />
                                   <Tooltip
-                                    formatter={(value, name) => {
-                                      if (name === 'power') {
-                                        return [`${Number(value).toFixed(3)} dB`, 'Puissance'];
+                                    labelFormatter={(label, payload) => {
+                                      const timestampText = payload?.[0]?.payload?.timestampText;
+                                      return timestampText && timestampText !== '-'
+                                        ? `${label} (${timestampText})`
+                                        : label;
+                                    }}
+                                    formatter={(value) => {
+                                      if (value === null || value === undefined) {
+                                        return ['N/A', 'Power'];
                                       }
-                                      return [`${Number(value).toFixed(3)} dB`, 'Variation'];
+                                      return [`${Number(value).toFixed(3)} dB`, 'Power'];
                                     }}
                                   />
                                   <Line
@@ -569,6 +688,7 @@ function Dashboard() {
                                     strokeWidth={2.5}
                                     dot={{ r: 3, fill: '#1d4ed8' }}
                                     activeDot={{ r: 5 }}
+                                    connectNulls
                                   />
                                 </LineChart>
                               </ResponsiveContainer>
@@ -576,54 +696,55 @@ function Dashboard() {
                           )}
                         </div>
 
-                        <div>
-                          <h5 className="text-sm font-bold text-slate-900 mb-3">Alarm History</h5>
-                          {routeHistoryAlarms.length === 0 ? (
-                            <p className="text-sm text-slate-600">No alarms found for this route.</p>
-                          ) : (
-                            <table className="min-w-full text-sm">
-                              <thead>
-                                <tr className="text-left text-slate-500 border-b border-slate-200">
-                                  <th className="pb-2 pr-4">Status</th>
-                                  <th className="pb-2 pr-4">Type</th>
-                                  <th className="pb-2 pr-4">Cause</th>
-                                  <th className="pb-2 pr-4">Location</th>
-                                  <th className="pb-2 pr-4">Attenuation</th>
-                                  <th className="pb-2 pr-4">Start Time</th>
-                                  <th className="pb-2 pr-4">End Time</th>
-                                  <th className="pb-2">Technician</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {routeHistoryAlarms.map((alarm) => {
-                                  const lifecycle = alarm.lifecycle || {};
-                                  const details = alarm.details || {};
-                                  const start = parseTimestamp(lifecycle.createdAt || lifecycle.created_at);
-                                  const end = parseTimestamp(lifecycle.resolvedAt || lifecycle.resolved_at);
+                        <div className="rounded-xl border border-slate-200 bg-white p-4">
+                          <div className="mb-3 flex items-center justify-between gap-2">
+                            <h5 className="text-sm font-bold text-slate-900">Test History</h5>
+                            <span className="text-xs font-medium text-slate-600">Newest first</span>
+                          </div>
 
-                                  return (
-                                    <tr key={alarm.alarmId || alarm.alarm_id || alarm.id} className="border-b border-slate-100">
-                                      <td className="py-2 pr-4">
-                                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${alarm.status === 'RESOLVED' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                          {alarm.status}
-                                        </span>
-                                      </td>
-                                      <td className="py-2 pr-4 text-slate-700">{alarm.alarmType || alarm.alarm_type || '-'}</td>
-                                      <td className="py-2 pr-4 text-slate-700">{details.faultCause || details.fault_cause || details.eventType || details.event_type || '-'}</td>
-                                      <td className="py-2 pr-4 text-slate-700">{details.faultLocationDescription || details.fault_location_description || details.eventLocationKm || details.event_location_km || '-'}</td>
-                                      <td className="py-2 pr-4 text-slate-700">
-                                        {details.attenuationDb ?? details.attenuation_db ?? details.totalLossDb ?? details.total_loss_db ?? '-'}
-                                      </td>
-                                      <td className="py-2 pr-4 text-slate-600">{start ? start.toLocaleString() : '-'}</td>
-                                      <td className="py-2 pr-4 text-slate-600">{end ? end.toLocaleString() : '-'}</td>
-                                      <td className="py-2 text-slate-700">{lifecycle.assignedBy || lifecycle.assigned_by || '-'}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
+                          {routeHistoryTableData.length === 0 ? (
+                            <p className="text-sm text-slate-600">No OTDR tests found for this route.</p>
+                          ) : (
+                            <div className="max-h-72 overflow-auto rounded-lg border border-slate-200">
+                              <table className="min-w-full text-sm">
+                                <thead className="bg-slate-50 text-left text-slate-500">
+                                  <tr>
+                                    <th className="px-3 py-2">Time</th>
+                                    <th className="px-3 py-2">Mode</th>
+                                    <th className="px-3 py-2">Wavelength</th>
+                                    <th className="px-3 py-2">Power</th>
+                                    <th className="px-3 py-2">Variation</th>
+                                    <th className="px-3 py-2">Result</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {routeHistoryTableData.map((test, index) => {
+                                    const measuredAt = parseTimestamp(test.measuredAt);
+                                    return (
+                                      <tr key={test.id || `${selectedRouteHistory.routeId}-${test.measuredAt || index}-${index}`} className="border-t border-slate-100">
+                                        <td className="px-3 py-2 text-slate-700">{measuredAt ? measuredAt.toLocaleString() : '-'}</td>
+                                        <td className="px-3 py-2 text-slate-600">{test.testMode || '-'}</td>
+                                        <td className="px-3 py-2 text-slate-600">{test.wavelengthNm != null ? `${test.wavelengthNm} nm` : '-'}</td>
+                                        <td className="px-3 py-2 text-slate-700">
+                                          {typeof test.averagePowerDb === 'number' ? `${Number(test.averagePowerDb).toFixed(3)} dB` : '-'}
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-700">
+                                          {typeof test.powerVariationDb === 'number' ? `${Number(test.powerVariationDb).toFixed(3)} dB` : '-'}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${test.testResult === 'Pass' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                            {test.testResult || '-'}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
                           )}
                         </div>
+
                       </div>
                     )}
                   </div>
@@ -632,16 +753,9 @@ function Dashboard() {
             )}
 
             <div className="card shadow-lg">
-              <h3 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                <span className="flex items-center space-x-2">
-                  <AlertCircle className="w-5 h-5 text-red-600" />
-                  <span>Active Alarms ({alarms.length})</span>
-                </span>
-                {alarms.length > 0 && (
-                  <span className="px-4 py-2 bg-red-100 text-red-800 rounded-full text-sm font-medium animate-pulse shadow-md">
-                    ⚠️ Requires Attention
-                  </span>
-                )}
+              <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <span>Active Alarms ({alarms.length})</span>
               </h3>
               <AlarmList alarms={alarms} onRefresh={loadActiveAlarms} />
             </div>
@@ -665,46 +779,57 @@ function Dashboard() {
                     onChange={async (event) => {
                       const nextRtuId = event.target.value;
                       setSelectedRtuId(nextRtuId);
-                      await loadSelectedRtuDetails(nextRtuId);
+                      await loadSelectedRtuHealth(nextRtuId);
                     }}
                   >
                     {rtus.length === 0 && <option value="">No RTUs available</option>}
                     {rtus.map((item) => (
-                      <option key={item.rtu_id} value={item.rtu_id}>{item.rtu_id}</option>
+                      <option key={item.rtuId} value={item.rtuId}>{item.rtuId}</option>
                     ))}
                   </select>
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
-              <div className="card bg-gradient-to-br from-emerald-50 to-green-100">
-                <p className="text-xs font-semibold text-slate-600">RTU Status</p>
-                <p className={`mt-2 text-2xl font-bold ${selectedRtuSummary?.ems_connected ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {selectedRtuSummary?.ems_connected ? 'Online' : 'Offline'}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              <div className="card bg-gradient-to-br from-amber-50 to-orange-100">
+                <p className="text-xs font-semibold text-slate-600">Temperature</p>
+                <p className="mt-2 text-2xl font-bold text-orange-700">
+                  {selectedRtuHealthLoading
+                    ? 'Loading...'
+                    : selectedRtuHealth?.temperatureC != null
+                      ? `${Number(selectedRtuHealth.temperatureC).toFixed(1)}°C`
+                      : 'N/A'}
                 </p>
               </div>
 
               <div className="card bg-gradient-to-br from-cyan-50 to-sky-100">
-                <p className="text-xs font-semibold text-slate-600">Monitoring</p>
-                <p className={`mt-2 text-2xl font-bold ${selectedRtuSummary?.is_monitoring ? 'text-sky-700' : 'text-slate-700'}`}>
-                  {selectedRtuSummary?.is_monitoring ? 'Running' : 'Stopped'}
+                <p className="text-xs font-semibold text-slate-600">CPU Usage</p>
+                <p className="mt-2 text-2xl font-bold text-sky-700">
+                  {selectedRtuHealthLoading
+                    ? 'Loading...'
+                    : selectedRtuHealth?.cpuUsagePercent != null
+                      ? `${Number(selectedRtuHealth.cpuUsagePercent).toFixed(1)}%`
+                      : 'N/A'}
                 </p>
               </div>
 
-              <div className="card bg-gradient-to-br from-amber-50 to-orange-100">
-                <p className="text-xs font-semibold text-slate-600">Temperature</p>
-                <p className="mt-2 text-2xl font-bold text-orange-700">{selectedRtuSummary?.temperature_c?.toFixed?.(1) ?? '0.0'}°C</p>
-              </div>
-
               <div className="card bg-gradient-to-br from-violet-50 to-purple-100">
-                <p className="text-xs font-semibold text-slate-600">Routes</p>
-                <p className="mt-2 text-2xl font-bold text-purple-700">{selectedRtuSummary?.routes_count ?? selectedRtuRoutes.length}</p>
+                <p className="text-xs font-semibold text-slate-600">Memory Usage</p>
+                <p className="mt-2 text-2xl font-bold text-purple-700">
+                  {selectedRtuHealthLoading
+                    ? 'Loading...'
+                    : selectedRtuHealth?.memoryUsagePercent != null
+                      ? `${Number(selectedRtuHealth.memoryUsagePercent).toFixed(1)}%`
+                      : 'N/A'}
+                </p>
               </div>
 
-              <div className="card bg-gradient-to-br from-blue-50 to-indigo-100">
-                <p className="text-xs font-semibold text-slate-600">Active Alarms</p>
-                <p className="mt-2 text-2xl font-bold text-indigo-700">{selectedRtuSummary?.active_alarms ?? 0}</p>
+              <div className="card bg-gradient-to-br from-emerald-50 to-green-100">
+                <p className="text-xs font-semibold text-slate-600">Power Supply</p>
+                <p className="mt-2 text-2xl font-bold text-emerald-700">
+                  {selectedRtuHealthLoading ? 'Loading...' : (selectedRtuHealth?.powerSupplyStatus || 'N/A')}
+                </p>
               </div>
             </div>
 
@@ -729,11 +854,11 @@ function Dashboard() {
                     </thead>
                     <tbody>
                       {selectedRtuRoutes.map((route) => (
-                        <tr key={route.route_id || route.routeId} className="border-b border-slate-100">
-                          <td className="py-2 pr-3 font-medium text-slate-700">{route.route_id || route.routeId}</td>
-                          <td className="py-2 pr-3 text-slate-600">{route.current_status?.toString?.() || route.status || 'UNKNOWN'}</td>
-                          <td className="py-2 pr-3 text-slate-600">{route.fiber_length_km ?? route?.fiberSpec?.lengthKm ?? '-'} km</td>
-                          <td className="py-2 text-slate-600">{route.active_alarms ?? route?.currentCondition?.activeAlarms ?? 0}</td>
+                        <tr key={route.routeId} className="border-b border-slate-100">
+                          <td className="py-2 pr-3 font-medium text-slate-700">{route.routeId}</td>
+                          <td className="py-2 pr-3 text-slate-600">{route.status || 'UNKNOWN'}</td>
+                          <td className="py-2 pr-3 text-slate-600">{route.fiberLengthKm ?? '-'} km</td>
+                          <td className="py-2 text-slate-600">{route.activeAlarms ?? 0}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -741,26 +866,6 @@ function Dashboard() {
                 </div>
               )}
             </div>
-
-            {selectedRtuDetails && (
-              <div className="card shadow-lg">
-                <h3 className="text-lg font-semibold mb-4">Additional RTU Metrics</h3>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-semibold text-slate-500">Power Supply</p>
-                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.power_supply || 'Normal'}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-semibold text-slate-500">Communication</p>
-                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.communication || 'Connected'}</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <p className="text-xs font-semibold text-slate-500">OTDR Availability</p>
-                    <p className="mt-2 text-xl font-bold text-slate-800">{selectedRtuDetails.otdr_availability || 'Ready'}</p>
-                  </div>
-                </div>
-              </div>
-            )}
           </>
         )}
 
@@ -787,113 +892,138 @@ function Dashboard() {
               <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-cyan-50 p-6 shadow-sm">
                 <div className="mb-4 flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                    {STANDALONE_TOPOLOGY.rtus.length} RTUs + 1 NOC
+                    {topologyRtus.length} RTUs
                   </span>
                   <span className="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
-                    {totalStandaloneRoutes} Fiber Routes
-                  </span>
-                  <span className="inline-flex items-center rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
-                    {topologyRtus.length} Backbone Links to NOC
+                    {totalTopologyRoutes} Fiber Routes
                   </span>
                 </div>
 
-                <div className="relative h-80 rounded-2xl border border-slate-200 bg-white/80 p-4">
-                  <svg className="absolute inset-0 h-full w-full" viewBox="0 0 800 320" preserveAspectRatio="none">
-                    {topologyRtus.map((rtu, idx) => {
-                      const angle = (idx / Math.max(topologyRtus.length, 1)) * Math.PI * 2;
-                      const x = 400 + 260 * Math.cos(angle);
-                      const y = 160 + 105 * Math.sin(angle);
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                  <div className="xl:col-span-2 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+                    {topologyRtus.length === 0 ? (
+                      <div className="flex h-[420px] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-600">
+                        No topology coordinates found.
+                      </div>
+                    ) : (
+                      <div className="relative h-[420px] overflow-hidden rounded-xl border border-slate-200 bg-gradient-to-br from-cyan-50 via-white to-blue-100">
+                        <div className="absolute inset-0 opacity-60" style={{
+                          backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(30, 41, 59, 0.15) 1px, transparent 0)',
+                          backgroundSize: '22px 22px',
+                        }} />
 
-                      return (
-                        <line
-                          key={`line-${rtu.id}`}
-                          x1="400"
-                          y1="160"
-                          x2={x}
-                          y2={y}
-                          stroke={rtu.color}
-                          strokeWidth="2.5"
-                          strokeDasharray="6 4"
-                          opacity="0.9"
-                        />
-                      );
-                    })}
-                  </svg>
+                        <svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none">
+                          <defs>
+                            <marker id="route-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                              <path d="M0,0 L6,3 L0,6 z" fill={selectedTopologyRtu?.color || '#2563eb'} />
+                            </marker>
+                          </defs>
 
-                  <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <div className="rounded-full border-4 border-white bg-gradient-to-br from-blue-600 to-indigo-700 px-6 py-4 text-center text-white shadow-lg">
-                      <p className="text-xs font-semibold uppercase tracking-wide opacity-90">Central Node</p>
-                      <p className="text-sm font-bold">{STANDALONE_TOPOLOGY.central.id}</p>
-                    </div>
-                  </div>
-
-                  {topologyRtus.map((rtu, idx) => {
-                    const angle = (idx / Math.max(topologyRtus.length, 1)) * Math.PI * 2;
-                    const left = 50 + 38 * Math.cos(angle);
-                    const top = 50 + 34 * Math.sin(angle);
-
-                    return (
-                      <div
-                        key={rtu.id}
-                        className="absolute w-48 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm"
-                        style={{ left: `${left}%`, top: `${top}%` }}
-                      >
-                        <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500">RTU Node</p>
-                        <p className="truncate text-xs font-bold text-slate-800">{rtu.id}</p>
-                        <p className="truncate text-[10px] text-slate-600">{rtu.city}</p>
-                        <p className="mt-1 text-[10px] font-semibold" style={{ color: rtu.color }}>
-                          Backbone to NOC: {rtu.backboneKm} km
-                        </p>
-                        <div className="mt-2 space-y-1 border-t border-slate-200 pt-1.5">
-                          {rtu.routes.map((route) => (
-                            <div key={`${rtu.id}-${route.id}`} className="flex items-center justify-between text-[10px]">
-                              <span className="truncate font-semibold text-slate-700">{route.id}</span>
-                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700">
-                                {route.distanceKm} km
-                              </span>
-                            </div>
+                          {selectedTopologyRtu && selectedTopologyRoutes.map((route) => (
+                            <g key={`line-${selectedTopologyRtu.id}-${route.id}`}>
+                              <line
+                                x1={selectedTopologyRtu.position.x}
+                                y1={selectedTopologyRtu.position.y}
+                                x2={route.position.x}
+                                y2={route.position.y}
+                                stroke={selectedTopologyRtu.color}
+                                strokeWidth="0.55"
+                                strokeDasharray="2 1.5"
+                                markerEnd="url(#route-arrow)"
+                                opacity="0.75"
+                              />
+                              <circle
+                                cx={route.position.x}
+                                cy={route.position.y}
+                                r="0.95"
+                                fill={selectedTopologyRtu.color}
+                                opacity="0.95"
+                              />
+                            </g>
                           ))}
+                        </svg>
+
+                        {topologyRtus.map((rtu) => {
+                          const isActive = selectedTopologyRtu?.id === rtu.id;
+
+                          return (
+                            <button
+                              key={rtu.id}
+                              type="button"
+                              onClick={() => setSelectedTopologyRtuId(rtu.id)}
+                              className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-lg border-2 px-2.5 py-1.5 text-left transition-all ${
+                                isActive
+                                  ? 'scale-105 bg-slate-900 text-white shadow-xl'
+                                  : 'bg-white/95 text-slate-800 shadow-md hover:scale-105 hover:bg-white'
+                              }`}
+                              style={{
+                                left: `${rtu.position.x}%`,
+                                top: `${rtu.position.y}%`,
+                                borderColor: rtu.color,
+                                boxShadow: isActive ? `0 0 0 4px ${rtu.color}33` : undefined,
+                              }}
+                            >
+                              <p className="text-[11px] font-bold leading-tight">{rtu.id}</p>
+                              <p className={`text-[10px] leading-tight ${isActive ? 'text-slate-200' : 'text-slate-500'}`}>{rtu.city}</p>
+                            </button>
+                          );
+                        })}
+
+                        <div className="absolute left-3 top-3 rounded-md bg-white/90 px-2 py-1 text-[11px] font-medium text-slate-700 shadow-sm">
+                          Click an RTU node to display its routes
                         </div>
                       </div>
-                    );
-                  })}
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-sm">
+                    <h4 className="text-sm font-bold text-slate-900">Selected RTU</h4>
+                    {!selectedTopologyRtu ? (
+                      <p className="mt-2 text-sm text-slate-600">No RTU available in topology data.</p>
+                    ) : (
+                      <>
+                        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold text-slate-500">Node</p>
+                          <p className="text-sm font-bold text-slate-900 mt-1">{selectedTopologyRtu.id}</p>
+                          <p className="text-xs text-slate-600 mt-1">{selectedTopologyRtu.city}</p>
+                          <p className="text-xs text-slate-600 mt-1">{selectedTopologyRtu.routes.length} routes</p>
+                          <p className="text-[11px] text-slate-500 mt-2">
+                            Lat: {selectedTopologyRtu.lat != null ? selectedTopologyRtu.lat.toFixed(4) : '-'} | Lng: {selectedTopologyRtu.lng != null ? selectedTopologyRtu.lng.toFixed(4) : '-'}
+                          </p>
+                        </div>
+
+                        <div className="mt-4">
+                          <p className="text-xs font-semibold text-slate-500 mb-2">Routes</p>
+                          {selectedTopologyRoutes.length === 0 ? (
+                            <p className="text-sm text-slate-600">No routes linked to this RTU.</p>
+                          ) : (
+                            <div className="max-h-[260px] space-y-2 overflow-auto pr-1">
+                              {selectedTopologyRoutes.map((route) => (
+                                <div key={`${selectedTopologyRtu.id}-${route.id}`} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="text-xs font-bold text-slate-800">{route.id}</p>
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                                      {route.distanceKm} km
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
-                <p className="mt-4 text-sm text-slate-600">
-                  Use the <span className="font-semibold text-slate-800">Full Map</span> button for the full standalone topology page.
-                </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="card shadow-lg">
-                <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
-                  <GaugeCircle className="w-5 h-5 text-amber-600" />
-                  <span>Attenuation by Route (dB)</span>
-                </h3>
-                <div className="space-y-4">
-                  {routes.map((route) => {
-                    const loss = route?.currentCondition?.totalLossDb ?? 0;
-                    const ratio = Math.min(100, (loss / 12) * 100);
-                    return (
-                      <div key={route.routeId}>
-                        <div className="mb-1 flex items-center justify-between text-sm">
-                          <span className="font-semibold text-slate-700">{route.routeId}</span>
-                          <span className="text-slate-600">{loss.toFixed?.(2) ?? loss} dB</span>
-                        </div>
-                        <div className="h-2.5 w-full rounded-full bg-slate-200">
-                          <div className={`h-2.5 rounded-full ${loss > 10 ? 'bg-red-500' : loss > 3 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${ratio}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
+            <div className="grid grid-cols-1 gap-6">
               <div className="card shadow-lg">
                 <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
                   <ShieldCheck className="w-5 h-5 text-cyan-600" />
-                  <span>Latest OTDR Tests</span>
+                  <span>OTDR Tests</span>
                 </h3>
                 <div className="max-h-72 overflow-auto">
                   <table className="min-w-full text-sm">
@@ -933,21 +1063,13 @@ function Dashboard() {
   );
 }
 
-function AlarmSeverityBar({ label, count, total, color }) {
-  const percentage = total > 0 ? (count / total) * 100 : 0;
-
+function AlarmSeverityBar({ label, count, color, bgColor }) {
   return (
-    <div>
-      <div className="flex justify-between text-sm mb-2">
-        <span className="font-semibold text-gray-700">{label}</span>
-        <span className="text-gray-600 font-medium">{count} of {total}</span>
-      </div>
-      <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-        <div
-          className={`${color} h-3 rounded-full transition-all duration-700 ease-out shadow-inner`}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
+    <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 border border-gray-200 hover:bg-gray-100 transition-colors">
+      <span className="text-sm font-semibold text-gray-700">{label}</span>
+      <span className={`${bgColor} ${color} px-4 py-2 rounded-full text-lg font-bold shadow-md`}>
+        {count || 0}
+      </span>
     </div>
   );
 }
