@@ -8,7 +8,7 @@ import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
 import AvailabilityRangeChart from './AvailabilityRangeChart';
-import { AlertCircle, Activity, Router, Wifi, WifiOff, ShieldCheck, Radar, ExternalLink, History, Download, X } from 'lucide-react';
+import { AlertCircle, Activity, Router, ShieldCheck, Radar, ExternalLink, History, Download, X } from 'lucide-react';
 
 const TOPOLOGY_COLORS = ['#00d4aa', '#0084ff', '#00ff88', '#f97316', '#e11d48', '#a855f7', '#ffb700'];
 
@@ -37,6 +37,100 @@ const parseTimestamp = (value) => {
   }
 
   return null;
+};
+
+const extractAlarmCreatedAt = (alarm) => parseTimestamp(
+  alarm?.lifecycle?.createdAt
+  || alarm?.lifecycle?.created_at
+  || alarm?.updatedAt
+  || alarm?.updated_at
+);
+
+const toDateKey = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getSeverityBadgeClass = (severity) => {
+  switch (String(severity || '').toUpperCase()) {
+    case 'CRITICAL':
+      return 'bg-red-100 text-red-700';
+    case 'HIGH':
+      return 'bg-orange-100 text-orange-700';
+    case 'MEDIUM':
+      return 'bg-amber-100 text-amber-700';
+    case 'LOW':
+      return 'bg-blue-100 text-blue-700';
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+};
+
+const getStatusBadgeClass = (status) => {
+  switch (String(status || '').toUpperCase()) {
+    case 'ACTIVE':
+      return 'bg-red-100 text-red-700';
+    case 'ACKNOWLEDGED':
+      return 'bg-amber-100 text-amber-700';
+    case 'RESOLVED':
+      return 'bg-emerald-100 text-emerald-700';
+    case 'CLEARED':
+      return 'bg-cyan-100 text-cyan-700';
+    case 'SUPPRESSED':
+      return 'bg-slate-200 text-slate-700';
+    default:
+      return 'bg-slate-100 text-slate-700';
+  }
+};
+
+const normalizeRouteStatus = (status) => String(status || '')
+  .trim()
+  .toUpperCase()
+  .replace(/[\s-]+/g, '_');
+
+const getRouteStatusPresentation = (status) => {
+  switch (normalizeRouteStatus(status)) {
+    case 'BREAK':
+    case 'BROKEN':
+    case 'FIBER_BREAK':
+      return {
+        borderClass: 'border-red-500 hover:border-red-600',
+        badgeClass: 'bg-red-100 text-red-700',
+      };
+    case 'DEGRADATION':
+    case 'DEGRADED':
+    case 'HIGH_LOSS_SPLICE':
+      return {
+        borderClass: 'border-orange-400 hover:border-orange-500',
+        badgeClass: 'bg-orange-100 text-orange-700',
+      };
+    case 'NORMAL':
+      return {
+        borderClass: 'border-emerald-400 hover:border-emerald-500',
+        badgeClass: 'bg-emerald-100 text-emerald-700',
+      };
+    case 'MAINTENANCE':
+      return {
+        borderClass: 'border-sky-400 hover:border-sky-500',
+        badgeClass: 'bg-sky-100 text-sky-700',
+      };
+    case 'UNKNOWN':
+      return {
+        borderClass: 'border-slate-300 hover:border-slate-400',
+        badgeClass: 'bg-slate-200 text-slate-700',
+      };
+    default:
+      return {
+        borderClass: 'border-slate-300 hover:border-indigo-500',
+        badgeClass: 'bg-slate-200 text-slate-800',
+      };
+  }
 };
 
 const extractFilenameFromHeader = (contentDisposition, fallbackName) => {
@@ -184,12 +278,14 @@ function Dashboard({ activeView, setActiveView }) {
   const [alarms, setAlarms] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [wsConnected, setWsConnected] = useState(false);
   const [routes, setRoutes] = useState([]);
   const [rtus, setRtus] = useState([]);
   const [selectedRtuId, setSelectedRtuId] = useState('');
   const [selectedRtuHealth, setSelectedRtuHealth] = useState(null);
   const [selectedRtuHealthLoading, setSelectedRtuHealthLoading] = useState(false);
+  const [selectedRtuAlarmHistory, setSelectedRtuAlarmHistory] = useState([]);
+  const [selectedRtuAlarmHistoryLoading, setSelectedRtuAlarmHistoryLoading] = useState(false);
+  const [selectedRtuAlarmDate, setSelectedRtuAlarmDate] = useState('');
   const [recentTests, setRecentTests] = useState([]);
   const [selectedRouteHistory, setSelectedRouteHistory] = useState(null);
   const [routeHistoryTests, setRouteHistoryTests] = useState([]);
@@ -248,25 +344,20 @@ function Dashboard({ activeView, setActiveView }) {
         console.log('New alarm received:', alarm);
         setAlarms(prev => [alarm, ...prev].slice(0, 50));
         loadAlarmStatistics();
-        setWsConnected(true);
       });
 
       kpiSub = websocketService.subscribe('/topic/kpis', (newKpi) => {
         console.log('New KPI received:', newKpi);
         setKpi(newKpi);
         loadAvailabilityHistory();
-        setWsConnected(true);
       });
     };
 
     websocketService.connect(
       () => {
-        setWsConnected(true);
         subscribeToTopics();
       },
-      () => {
-        setWsConnected(false);
-      }
+      () => {}
     );
 
     const interval = setInterval(() => {
@@ -277,7 +368,6 @@ function Dashboard({ activeView, setActiveView }) {
       loadActiveAlarms();
       loadRoutes();
       loadRecentTests();
-      setWsConnected(websocketService.isConnected());
     }, 120000);
 
     return () => {
@@ -320,7 +410,7 @@ function Dashboard({ activeView, setActiveView }) {
       const response = await kpisAPI.getHistory({
         kpiType: 'NETWORK_HEALTH',
         period: 'REALTIME',
-        hours: 24 * 14,
+        all: true,
       });
       setAvailabilityHistory(normalizeList(response.data));
     } catch (error) {
@@ -355,6 +445,25 @@ function Dashboard({ activeView, setActiveView }) {
   };
 
   const normalizeList = (payload) => (Array.isArray(payload) ? payload : payload?.value || []);
+
+  const loadSelectedRtuAlarmHistory = async (rtuId) => {
+    if (!rtuId) {
+      setSelectedRtuAlarmHistory([]);
+      return;
+    }
+
+    setSelectedRtuAlarmHistoryLoading(true);
+    try {
+      const response = await alarmsAPI.getByRtu(rtuId);
+      const alarmList = normalizeList(response.data);
+      setSelectedRtuAlarmHistory(alarmList);
+    } catch (error) {
+      console.error(`Error loading alarm history for RTU ${rtuId}:`, error);
+      setSelectedRtuAlarmHistory([]);
+    } finally {
+      setSelectedRtuAlarmHistoryLoading(false);
+    }
+  };
 
   const loadSelectedRtuHealth = async (rtuId) => {
     if (!rtuId) {
@@ -408,16 +517,21 @@ function Dashboard({ activeView, setActiveView }) {
         if (preferredRtuId !== selectedRtuId) {
           setSelectedRtuId(preferredRtuId);
         }
-        await loadSelectedRtuHealth(preferredRtuId);
+        await Promise.all([
+          loadSelectedRtuHealth(preferredRtuId),
+          loadSelectedRtuAlarmHistory(preferredRtuId)
+        ]);
       } else {
         setSelectedRtuId('');
         setSelectedRtuHealth(null);
+        setSelectedRtuAlarmHistory([]);
       }
     } catch (error) {
       console.error('Error loading routes:', error);
       setRoutes([]);
       setRtus([]);
       setSelectedRtuHealth(null);
+      setSelectedRtuAlarmHistory([]);
     }
   };
 
@@ -673,6 +787,17 @@ function Dashboard({ activeView, setActiveView }) {
       fiberLengthKm: route?.fiberSpec?.lengthKm,
       activeAlarms: route?.currentCondition?.activeAlarms ?? 0,
     }));
+  const sortedSelectedRtuAlarmHistory = [...selectedRtuAlarmHistory].sort((left, right) => {
+    const leftCreatedAt = extractAlarmCreatedAt(left)?.getTime() || 0;
+    const rightCreatedAt = extractAlarmCreatedAt(right)?.getTime() || 0;
+    return rightCreatedAt - leftCreatedAt;
+  });
+  const filteredSelectedRtuAlarmHistory = selectedRtuAlarmDate
+    ? sortedSelectedRtuAlarmHistory.filter((alarm) => {
+        const createdAt = extractAlarmCreatedAt(alarm);
+        return createdAt ? toDateKey(createdAt) === selectedRtuAlarmDate : false;
+      })
+    : sortedSelectedRtuAlarmHistory;
   const powerSupplyState = selectedRtuHealth?.powerSupplyStatus || null;
   const powerSupplyIsNormal = typeof powerSupplyState === 'string'
     ? powerSupplyState.toUpperCase() === 'NORMAL'
@@ -785,14 +910,6 @@ function Dashboard({ activeView, setActiveView }) {
                 <span>Network Operations Center</span>
               </h2>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className={`flex items-center space-x-2 px-4 py-2 rounded-lg backdrop-blur-sm ${wsConnected ? 'bg-green-500/80' : 'bg-red-500/80'} animate-pulse`}>
-                {wsConnected ? <Wifi className="w-5 h-5" /> : <WifiOff className="w-5 h-5" />}
-                <span className="text-sm font-medium">
-                  {wsConnected ? 'Live Connection' : 'Reconnecting...'}
-                </span>
-              </div>
-            </div>
           </div>
         </div>
 
@@ -862,12 +979,15 @@ function Dashboard({ activeView, setActiveView }) {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {routes.map((route) => {
+                    const statusLabel = route.status || 'UNKNOWN';
+                    const statusPresentation = getRouteStatusPresentation(statusLabel);
+
                     return (
                       <button
                         type="button"
                         key={route.routeId}
                         onClick={() => openRouteHistory(route)}
-                        className="rounded-xl border-2 border-slate-300 bg-white p-4 shadow-md text-left transition-all hover:shadow-lg hover:border-indigo-500"
+                        className={`rounded-xl border-2 ${statusPresentation.borderClass} bg-white p-4 shadow-md text-left transition-all hover:shadow-lg`}
                       >
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1">
@@ -878,10 +998,10 @@ function Dashboard({ activeView, setActiveView }) {
                         </div>
 
                         <div className="mt-3 flex items-center justify-between gap-2">
-                          <span className="inline-flex rounded-full bg-slate-200 px-2.5 py-1 text-xs font-medium text-slate-800">
-                            Status: {route.status}
+                          <span className={`inline-flex rounded-full ${statusPresentation.badgeClass} px-2.5 py-1 text-xs font-medium`}>
+                            Status: {statusLabel}
                           </span>
-                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-500 px-2.5 py-1 text-xs font-semibold text-white">
                             <History className="w-3 h-3" /> History
                           </span>
                         </div>
@@ -1165,7 +1285,10 @@ function Dashboard({ activeView, setActiveView }) {
                     onChange={async (event) => {
                       const nextRtuId = event.target.value;
                       setSelectedRtuId(nextRtuId);
-                      await loadSelectedRtuHealth(nextRtuId);
+                      await Promise.all([
+                        loadSelectedRtuHealth(nextRtuId),
+                        loadSelectedRtuAlarmHistory(nextRtuId)
+                      ]);
                     }}
                   >
                     {rtus.length === 0 && <option value="">No RTUs available</option>}
@@ -1252,6 +1375,100 @@ function Dashboard({ activeView, setActiveView }) {
                           <td className="py-2 text-slate-600">{route.activeAlarms ?? 0}</td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="card shadow-lg">
+              <div className="mb-4 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold text-slate-800 flex items-center space-x-2">
+                    <History className="w-5 h-5 text-red-600" />
+                    <span>Alarm History for {selectedRtuId || 'Selected RTU'}</span>
+                  </h3>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-600">
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1">Total: {sortedSelectedRtuAlarmHistory.length}</span>
+                    <span className="rounded-full bg-blue-100 px-2.5 py-1 text-blue-700">Shown: {filteredSelectedRtuAlarmHistory.length}</span>
+                    {selectedRtuAlarmDate && (
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-emerald-700">Date: {selectedRtuAlarmDate}</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="w-full md:w-auto">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label htmlFor="rtuAlarmDateFilter" className="text-sm font-semibold text-slate-700 whitespace-nowrap">
+                      Filter by date
+                    </label>
+                    <input
+                      id="rtuAlarmDateFilter"
+                      type="date"
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+                      value={selectedRtuAlarmDate}
+                      onChange={(event) => setSelectedRtuAlarmDate(event.target.value)}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRtuAlarmDate('')}
+                      disabled={!selectedRtuAlarmDate}
+                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {selectedRtuAlarmHistoryLoading ? (
+                <p className="text-sm text-slate-500">Loading RTU alarm history...</p>
+              ) : filteredSelectedRtuAlarmHistory.length === 0 ? (
+                <p className="text-sm text-slate-500">
+                  {selectedRtuAlarmDate
+                    ? 'No alarms found for the selected date.'
+                    : 'No alarm history found for this RTU.'}
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="pb-2 pr-3">Date</th>
+                        <th className="pb-2 pr-3">Route</th>
+                        <th className="pb-2 pr-3">Type</th>
+                        <th className="pb-2 pr-3">Severity</th>
+                        <th className="pb-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSelectedRtuAlarmHistory.map((alarm, index) => {
+                        const createdAt = extractAlarmCreatedAt(alarm);
+                        const routeId = alarm.routeId || alarm.route_id || '-';
+                        const alarmType = String(alarm.alarmType || alarm.alarm_type || '-').replace(/_/g, ' ');
+                        const severity = String(alarm.severity || 'UNKNOWN').toUpperCase();
+                        const status = String(alarm.status || 'UNKNOWN').toUpperCase();
+                        const alarmIdentifier = alarm.alarmId || alarm.alarm_id || alarm.id || `alarm-${index}`;
+
+                        return (
+                          <tr key={alarmIdentifier} className="border-b border-slate-100">
+                            <td className="py-2 pr-3 text-slate-700">{createdAt ? createdAt.toLocaleDateString() : '-'}</td>
+                            <td className="py-2 pr-3 font-medium text-slate-700">{routeId}</td>
+                            <td className="py-2 pr-3 text-slate-600">{alarmType}</td>
+                            <td className="py-2 pr-3">
+                              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getSeverityBadgeClass(severity)}`}>
+                                {severity}
+                              </span>
+                            </td>
+                            <td className="py-2">
+                              <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${getStatusBadgeClass(status)}`}>
+                                {status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

@@ -37,9 +37,12 @@ public class KpiController {
     public ResponseEntity<List<Kpi>> getKpiHistory(
             @RequestParam Kpi.KpiType kpiType,
             @RequestParam(defaultValue = "REALTIME") Kpi.Period period,
-            @RequestParam(defaultValue = "24") int hours) {
-        
-        List<Kpi> kpis = kpiCalculationService.getKpiHistory(kpiType, period, hours);
+            @RequestParam(required = false) Integer hours,
+            @RequestParam(defaultValue = "false") boolean all) {
+
+        List<Kpi> kpis = all
+                ? kpiCalculationService.getKpiHistoryAll(kpiType, period)
+                : kpiCalculationService.getKpiHistory(kpiType, period, hours != null ? hours : 24);
         return ResponseEntity.ok(kpis);
     }
     

@@ -56,30 +56,6 @@ function App() {
     };
   }, [isAuthenticated]);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      return;
-    }
-
-    const handleBeforeUnload = () => {
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon('/api/auth/logout');
-        return;
-      }
-
-      fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-        keepalive: true
-      });
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [isAuthenticated]);
-
   const handleLoginSuccess = useCallback((authData) => {
     setIsAuthenticated(true);
     setUsername(authData?.username || 'operator');

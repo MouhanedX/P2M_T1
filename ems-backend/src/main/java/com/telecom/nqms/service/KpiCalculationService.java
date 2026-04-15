@@ -10,12 +10,14 @@ import com.telecom.nqms.repository.RouteRepository;
 import com.telecom.nqms.repository.RtuRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -301,12 +303,29 @@ public class KpiCalculationService {
      * Get KPI history
      */
     public List<Kpi> getKpiHistory(Kpi.KpiType kpiType, Kpi.Period period, int hours) {
-        Instant since = Instant.now().minus(hours, ChronoUnit.HOURS);
-        return kpiRepository.findByKpiTypeAndPeriodBetween(
+        int safeHours = Math.max(hours, 1);
+        Instant now = Instant.now();
+        Instant since = now.minus(safeHours, ChronoUnit.HOURS);
+
+        List<Kpi> kpis = new ArrayList<>(kpiRepository.findByKpiTypeAndPeriodBetween(
                 kpiType, 
                 period,
                 since,
-                Instant.now()
+                now
+        ));
+
+        kpis.sort(Comparator.comparing(Kpi::getTimestamp, Comparator.nullsLast(Comparator.naturalOrder())));
+        return kpis;
+    }
+
+    /**
+     * Get full KPI history for a KPI type and period
+     */
+    public List<Kpi> getKpiHistoryAll(Kpi.KpiType kpiType, Kpi.Period period) {
+        return kpiRepository.findByKpiTypeAndPeriod(
+                kpiType,
+                period,
+                Sort.by(Sort.Direction.ASC, "timestamp")
         );
     }
     
