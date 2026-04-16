@@ -5,6 +5,7 @@
 @layer base {
   :root {
     color-scheme: light;
+    --page-surface: #c9cfd6;
   }
 
   html {
@@ -16,12 +17,13 @@
     overflow-y: auto;
     overscroll-behavior-x: none;
     overscroll-behavior-y: none;
-    background-color: #f8fafc;
+    background-color: var(--page-surface);
   }
 
   body {
-    @apply bg-slate-50 text-slate-900 antialiased;
+    @apply text-slate-900 antialiased;
     font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background-color: var(--page-surface);
     margin: 0;
     width: 100%;
     max-width: 100%;
@@ -42,6 +44,7 @@
     max-width: 100%;
     min-height: 100svh;
     overflow-x: clip;
+    background-color: var(--page-surface);
   }
 
   ::selection {

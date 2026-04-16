@@ -8,9 +8,31 @@ import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
 import AvailabilityRangeChart from './AvailabilityRangeChart';
-import { AlertCircle, Activity, Router, ShieldCheck, Radar, ExternalLink, History, Download, X } from 'lucide-react';
+import { AlertCircle, Activity, Router, ShieldCheck, Clock3, Radar, ExternalLink, History, Download, X } from 'lucide-react';
 
 const TOPOLOGY_COLORS = ['#00d4aa', '#0084ff', '#00ff88', '#f97316', '#e11d48', '#a855f7', '#ffb700'];
+const RELIABILITY_TARGETS = {
+  mttrHours: 4,
+  mtbfHours: 720,
+};
+const RELIABILITY_RING_SEGMENT_COUNT = 18;
+
+const toPolarPoint = (centerX, centerY, radius, angleDegrees) => {
+  const radians = ((angleDegrees - 90) * Math.PI) / 180;
+  return {
+    x: centerX + (radius * Math.cos(radians)),
+    y: centerY + (radius * Math.sin(radians)),
+  };
+};
+
+const describeArcPath = (centerX, centerY, radius, startAngle, endAngle) => {
+  const start = toPolarPoint(centerX, centerY, radius, startAngle);
+  const end = toPolarPoint(centerX, centerY, radius, endAngle);
+  const largeArcFlag = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+  const sweepFlag = endAngle > startAngle ? 1 : 0;
+
+  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} ${sweepFlag} ${end.x} ${end.y}`;
+};
 
 const parseTimestamp = (value) => {
   if (value === null || value === undefined) {
@@ -270,6 +292,238 @@ const buildDistanceProfileSeries = (referencePoints, activeFault) => {
       };
     })
     .filter(Boolean);
+};
+
+const AvailabilityGaugeCard = ({ availabilityPercent, trend }) => {
+  const availability = Number.isFinite(availabilityPercent)
+    ? Math.max(0, Math.min(availabilityPercent, 100))
+    : 0;
+
+  const hasTrend = typeof trend === 'number' && Number.isFinite(trend) && trend !== 0;
+  const trendIsPositive = hasTrend ? trend > 0 : false;
+
+  const centerX = 110;
+  const centerY = 96;
+  const radius = 74;
+  const startAngle = -120;
+  const endAngle = 120;
+  const progressAngle = startAngle + ((endAngle - startAngle) * (availability / 100));
+
+  const needleEnd = toPolarPoint(centerX, centerY, radius - 20, progressAngle);
+  const needleTip = toPolarPoint(centerX, centerY, radius - 6, progressAngle);
+
+  const tooltipText = `${availability.toFixed(1)}%`;
+  const tooltipWidth = Math.max(56, (tooltipText.length * 7) + 16);
+  const tooltipX = Math.max(8, Math.min(220 - tooltipWidth - 8, needleTip.x - (tooltipWidth / 2)));
+  const tooltipY = Math.max(8, Math.min(62, needleTip.y - 34));
+
+  return (
+    <div className="relative h-full overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/70 p-5 shadow-lg shadow-slate-200/70">
+      <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-blue-300/20 blur-2xl" />
+      <div className="pointer-events-none absolute -left-8 -bottom-8 h-24 w-24 rounded-full bg-white/40 blur-2xl" />
+
+      <div className="absolute right-5 top-5 rounded-xl border border-blue-200 bg-blue-50 p-2.5 text-blue-700 backdrop-blur-sm">
+        <Activity className="h-6 w-6" />
+      </div>
+
+      <div className="relative flex h-full min-h-[170px] flex-col">
+        <div className="pr-16">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Network Availability</p>
+        </div>
+
+        <div className="mt-1 flex flex-1 flex-col items-center justify-center text-center">
+          <svg viewBox="0 0 220 140" className="w-full max-w-[220px]">
+            <path
+              d={describeArcPath(centerX, centerY, radius, startAngle, endAngle)}
+              fill="none"
+              stroke="#d8dde5"
+              strokeWidth="16"
+              strokeLinecap="round"
+            />
+
+            {availability > 0 && (
+              <path
+                d={describeArcPath(centerX, centerY, radius, startAngle, progressAngle)}
+                fill="none"
+                stroke="#1e3a8a"
+                strokeWidth="16"
+                strokeLinecap="round"
+              />
+            )}
+
+            <line
+              x1={centerX}
+              y1={centerY}
+              x2={needleEnd.x}
+              y2={needleEnd.y}
+              stroke="#1e3a8a"
+              strokeWidth="4"
+              strokeLinecap="round"
+            />
+            <circle cx={centerX} cy={centerY} r="11" fill="#1e3a8a" />
+            <circle cx={centerX} cy={centerY} r="4" fill="#bfdbfe" />
+
+            <rect
+              x={tooltipX}
+              y={tooltipY}
+              width={tooltipWidth}
+              height="22"
+              rx="4"
+              fill="#111827"
+              opacity="0.9"
+            />
+            <text
+              x={tooltipX + (tooltipWidth / 2)}
+              y={tooltipY + 15}
+              textAnchor="middle"
+              fill="#f8fafc"
+              fontSize="12"
+              fontWeight="700"
+            >
+              {tooltipText}
+            </text>
+          </svg>
+
+          {hasTrend && (
+            <p className={`mt-3 text-sm font-semibold ${trendIsPositive ? 'text-emerald-700' : 'text-rose-700'}`}>
+              {trendIsPositive ? '+' : ''}{trend.toFixed(1)}% vs last hour
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ReliabilityKpiCard = ({
+  title,
+  hours,
+  targetHours,
+  lowerIsBetter,
+  icon,
+  surfaceClass,
+}) => {
+  const valueHours = Number.isFinite(hours) ? hours : 0;
+  const goodThreshold = targetHours;
+  const warningThreshold = lowerIsBetter ? (targetHours * 1.5) : (targetHours * 0.7);
+  const gaugeMax = lowerIsBetter ? (targetHours * 2.4) : (targetHours * 1.4);
+  const clampedGaugeValue = Math.max(0, Math.min(valueHours, gaugeMax));
+  const normalizedValue = gaugeMax > 0 ? (clampedGaugeValue / gaugeMax) : 0;
+
+  const statusTone = lowerIsBetter
+    ? (valueHours <= goodThreshold ? 'good' : (valueHours <= warningThreshold ? 'warning' : 'bad'))
+    : (valueHours >= goodThreshold ? 'good' : (valueHours >= warningThreshold ? 'warning' : 'bad'));
+
+  const statusLabel = statusTone === 'good' ? 'Good' : statusTone === 'warning' ? 'Normal' : 'Not good';
+  const statusColor = statusTone === 'good' ? '#16a34a' : statusTone === 'warning' ? '#f59e0b' : '#ef4444';
+  const statusText = statusTone === 'good'
+    ? 'Target achieved'
+    : statusTone === 'warning'
+      ? 'Warning zone'
+      : 'Needs action';
+
+  const zoneColors = lowerIsBetter
+    ? ['#22c55e', '#f59e0b', '#ef4444']
+    : ['#ef4444', '#f59e0b', '#22c55e'];
+  const segmentAngleStep = 360 / RELIABILITY_RING_SEGMENT_COUNT;
+  const segmentsPerZone = RELIABILITY_RING_SEGMENT_COUNT / 3;
+  const markerSegmentIndex = Math.max(
+    0,
+    Math.min(RELIABILITY_RING_SEGMENT_COUNT - 1, Math.round(normalizedValue * (RELIABILITY_RING_SEGMENT_COUNT - 1)))
+  );
+  const markerAngle = (markerSegmentIndex * segmentAngleStep) - 90;
+  const markerPosition = toPolarPoint(70, 70, 50, markerAngle);
+
+  const ringSegments = Array.from({ length: RELIABILITY_RING_SEGMENT_COUNT }, (_, index) => {
+    const zoneIndex = Math.min(2, Math.floor(index / segmentsPerZone));
+    const angle = (index * segmentAngleStep) - 90;
+    const position = toPolarPoint(70, 70, 50, angle);
+
+    return {
+      index,
+      angle,
+      x: position.x,
+      y: position.y,
+      fill: zoneColors[zoneIndex],
+    };
+  });
+  const targetMarginHours = lowerIsBetter ? targetHours - valueHours : valueHours - targetHours;
+  const meetsTarget = targetMarginHours >= 0;
+  const marginLabel = `${Math.abs(targetMarginHours).toFixed(1)}h`;
+  const targetText = `${lowerIsBetter ? '<=' : '>='} ${targetHours.toFixed(1)}h`;
+  const valueDisplay = valueHours >= 100
+    ? Math.round(valueHours).toLocaleString()
+    : valueHours.toFixed(1);
+
+  return (
+    <div className={`relative h-full overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br ${surfaceClass} p-5 shadow-lg shadow-slate-200/70`}>
+      <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-cyan-300/25 blur-2xl" />
+      <div className="pointer-events-none absolute -left-10 -bottom-10 h-28 w-28 rounded-full bg-rose-200/20 blur-2xl" />
+
+      <div className="relative flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</p>
+          <p className="mt-1 text-xs text-slate-500">
+            {lowerIsBetter ? 'Mean Time To Repair' : 'Mean Time Between Failures'}
+          </p>
+        </div>
+
+        <div className={`rounded-xl border p-2.5 ${statusTone === 'good'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+          : statusTone === 'warning'
+            ? 'border-amber-200 bg-amber-50 text-amber-600'
+            : 'border-rose-200 bg-rose-50 text-rose-600'}`}
+        >
+          {icon}
+        </div>
+      </div>
+
+      <div className="relative mt-4 flex justify-center">
+        <div className="relative h-40 w-40">
+          <svg viewBox="0 0 140 140" className="h-full w-full">
+            {ringSegments.map((segment) => (
+              <rect
+                key={`${title}-segment-${segment.index}`}
+                x={segment.x - 6.2}
+                y={segment.y - 4.6}
+                width="12.4"
+                height="9.2"
+                rx="4.6"
+                transform={`rotate(${segment.angle} ${segment.x} ${segment.y})`}
+                fill={segment.fill}
+                opacity="0.95"
+              />
+            ))}
+
+            <circle cx={markerPosition.x} cy={markerPosition.y} r="11" fill={statusColor} opacity="0.2" />
+            <circle cx={markerPosition.x} cy={markerPosition.y} r="5.8" fill={statusColor} stroke="#ffffff" strokeWidth="2.6" />
+          </svg>
+
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Current</p>
+            <p className="text-3xl font-black tracking-tight text-indigo-600">{valueDisplay}</p>
+            <p className="text-xs font-semibold text-teal-600">hours</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative mt-2 space-y-2">
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>Target {targetText}</span>
+          <span>{lowerIsBetter ? 'Lower is better' : 'Higher is better'}</span>
+        </div>
+
+        <p className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusTone === 'good'
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+          : statusTone === 'warning'
+            ? 'border-amber-200 bg-amber-50 text-amber-700'
+            : 'border-rose-200 bg-rose-50 text-rose-700'}`}
+        >
+          {statusLabel} • {statusText.toLowerCase()} • {meetsTarget ? 'margin' : 'gap'} {marginLabel}
+        </p>
+      </div>
+    </div>
+  );
 };
 
 function Dashboard({ activeView, setActiveView }) {
@@ -683,7 +937,7 @@ function Dashboard({ activeView, setActiveView }) {
 
   if (loading) {
     return (
-      <div className="flex min-h-[55vh] items-center justify-center bg-white">
+      <div className="flex min-h-[55vh] items-center justify-center bg-transparent">
         <div className="text-center">
           <div className="mx-auto mb-5 flex w-20 items-center justify-between">
             <span className="h-3 w-3 rounded-full bg-blue-600 animate-pulse" style={{ animationDelay: '0ms' }} />
@@ -898,9 +1152,11 @@ function Dashboard({ activeView, setActiveView }) {
     const bTime = parseTimestamp(b.measuredAt)?.getTime() || 0;
     return bTime - aTime;
   });
+  const mttrHours = toFiniteNumber(kpi?.availability?.mttrHours) ?? 0;
+  const mtbfHours = toFiniteNumber(kpi?.availability?.mtbfHours) ?? 0;
 
   return (
-    <div className="w-full bg-white">
+    <div className="w-full bg-transparent">
       <div className="space-y-6 px-3 py-4 sm:px-5 lg:px-8">
         <div className="card relative overflow-hidden bg-gradient-to-r from-slate-900 via-blue-900 to-cyan-900 text-white shadow-2xl">
           <div className="flex items-center justify-between">
@@ -913,30 +1169,48 @@ function Dashboard({ activeView, setActiveView }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          <KpiCard
-            title="Network Availability"
-            value={kpi?.metrics?.networkAvailabilityPercent || 0}
-            unit="%"
-            icon={<Activity className="w-6 h-6" />}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
+          <AvailabilityGaugeCard
+            availabilityPercent={kpi?.metrics?.networkAvailabilityPercent || 0}
             trend={kpi?.trend?.hourOverHourChangePercent}
-            color={kpi?.metrics?.networkAvailabilityPercent >= 95 ? 'green' : 'red'}
           />
-          <KpiCard
-            title="Active Alarms"
-            value={kpi?.metrics?.totalAlarmsActive || 0}
-            icon={<AlertCircle className="w-6 h-6" />}
-            subtitle={`${kpi?.metrics?.criticalAlarms || 0} critical`}
-            color={kpi?.metrics?.criticalAlarms > 0 ? 'red' : 'yellow'}
-            isInteger={true}
+
+          <div className="grid grid-cols-1 gap-4">
+            <KpiCard
+              title="Active Alarms"
+              value={kpi?.metrics?.totalAlarmsActive || 0}
+              icon={<AlertCircle className="w-5 h-5" />}
+              subtitle={`${kpi?.metrics?.criticalAlarms || 0} critical`}
+              color={kpi?.metrics?.criticalAlarms > 0 ? 'red' : 'yellow'}
+              isInteger={true}
+              compact={true}
+            />
+            <KpiCard
+              title="Total Routes"
+              value={kpi?.metrics?.totalRoutes || 0}
+              icon={<Router className="w-5 h-5" />}
+              subtitle={`${kpi?.metrics?.routesNormal || 0} normal`}
+              color="blue"
+              isInteger={true}
+              compact={true}
+            />
+          </div>
+
+          <ReliabilityKpiCard
+            title="MTTR"
+            hours={mttrHours}
+            targetHours={RELIABILITY_TARGETS.mttrHours}
+            lowerIsBetter={true}
+            icon={<Clock3 className="h-5 w-5" />}
+            surfaceClass="from-rose-50/80 via-white to-sky-50/70"
           />
-          <KpiCard
-            title="Total Routes"
-            value={kpi?.metrics?.totalRoutes || 0}
-            icon={<Router className="w-6 h-6" />}
-            subtitle={`${kpi?.metrics?.routesNormal || 0} normal`}
-            color="blue"
-            isInteger={true}
+          <ReliabilityKpiCard
+            title="MTBF"
+            hours={mtbfHours}
+            targetHours={RELIABILITY_TARGETS.mtbfHours}
+            lowerIsBetter={false}
+            icon={<ShieldCheck className="h-5 w-5" />}
+            surfaceClass="from-cyan-50/80 via-white to-emerald-50/70"
           />
         </div>
 
