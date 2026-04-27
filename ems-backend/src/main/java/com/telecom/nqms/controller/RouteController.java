@@ -16,7 +16,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/routes")
@@ -24,13 +27,16 @@ import java.util.List;
 @Tag(name = "Routes", description = "Fiber route management APIs")
 public class RouteController {
 
+    private static final int STANDARD_WAVELENGTH_NM = 1625;
+    private static final Pattern ROUTE_SUFFIX_PATTERN = Pattern.compile("(?:^|_)R(\\d+)(?:$|_)", Pattern.CASE_INSENSITIVE);
+
     private final RouteRepository routeRepository;
     private final OtdrTestResultRepository testResultRepository;
 
     @GetMapping
     @Operation(summary = "Get all routes")
     public ResponseEntity<List<Route>> getAllRoutes() {
-        return ResponseEntity.ok(routeRepository.findAll());
+        return ResponseEntity.ok(sortRoutesByRtuAndRouteId(routeRepository.findAll()));
     }
 
     @GetMapping("/{routeId}")
@@ -44,7 +50,7 @@ public class RouteController {
     @GetMapping("/rtu/{rtuId}")
     @Operation(summary = "Get routes by RTU")
     public ResponseEntity<List<Route>> getRoutesByRtu(@PathVariable String rtuId) {
-        return ResponseEntity.ok(routeRepository.findByRtuId(rtuId));
+        return ResponseEntity.ok(sortRoutesByRouteId(routeRepository.findByRtuId(rtuId)));
     }
 
     @PostMapping("/telemetry")
@@ -61,13 +67,14 @@ public class RouteController {
                         .rtuId(request.rtuId)
                         .region("Unknown")
                         .status(Route.RouteStatus.UNKNOWN)
-                        .currentCondition(Route.CurrentCondition.builder().build())
+                        .currentCondition(Route.CurrentCondition.builder().wavelengthNm(STANDARD_WAVELENGTH_NM).build())
                         .build());
 
         if (route.getCurrentCondition() == null) {
-            route.setCurrentCondition(Route.CurrentCondition.builder().build());
+            route.setCurrentCondition(Route.CurrentCondition.builder().wavelengthNm(STANDARD_WAVELENGTH_NM).build());
         }
 
+        int normalizedWavelengthNm = STANDARD_WAVELENGTH_NM;
         Route.CurrentCondition condition = route.getCurrentCondition();
         condition.setLastTestTime(request.measuredAt != null ? request.measuredAt : Instant.now());
         condition.setTotalLossDb(request.totalLossDb);
@@ -76,7 +83,7 @@ public class RouteController {
         condition.setTestMode(request.testMode);
         condition.setPulseWidthNs(request.pulseWidthNs);
         condition.setDynamicRangeDb(request.dynamicRangeDb);
-        condition.setWavelengthNm(request.wavelengthNm);
+        condition.setWavelengthNm(normalizedWavelengthNm);
         condition.setTestResult(request.testResult);
         condition.setFaultDistanceKm(request.faultDistanceKm);
         condition.setEventReferenceFile(request.eventReferenceFile);
@@ -101,7 +108,7 @@ public class RouteController {
                 .testMode(request.testMode)
                 .pulseWidthNs(request.pulseWidthNs)
                 .dynamicRangeDb(request.dynamicRangeDb)
-                .wavelengthNm(request.wavelengthNm)
+                .wavelengthNm(normalizedWavelengthNm)
                 .testResult(request.testResult)
                 .totalLossDb(request.totalLossDb)
                 .eventCount(request.eventCount)
@@ -117,6 +124,45 @@ public class RouteController {
         testResultRepository.save(result);
 
         return ResponseEntity.ok(savedRoute);
+    }
+
+    private List<Route> sortRoutesByRtuAndRouteId(List<Route> routes) {
+        return routes.stream()
+                .sorted(Comparator
+                        .comparing((Route route) -> sanitize(route.getRtuId()), String.CASE_INSENSITIVE_ORDER)
+                        .thenComparing((left, right) -> compareRouteIds(left.getRouteId(), right.getRouteId())))
+                .toList();
+    }
+
+    private List<Route> sortRoutesByRouteId(List<Route> routes) {
+        return routes.stream()
+                .sorted((left, right) -> compareRouteIds(left.getRouteId(), right.getRouteId()))
+                .toList();
+    }
+
+    private int compareRouteIds(String leftRouteId, String rightRouteId) {
+        int leftOrder = extractRouteOrder(leftRouteId);
+        int rightOrder = extractRouteOrder(rightRouteId);
+        if (leftOrder != rightOrder) {
+            return Integer.compare(leftOrder, rightOrder);
+        }
+        return sanitize(leftRouteId).compareToIgnoreCase(sanitize(rightRouteId));
+    }
+
+    private int extractRouteOrder(String routeId) {
+        Matcher matcher = ROUTE_SUFFIX_PATTERN.matcher(sanitize(routeId));
+        if (matcher.find()) {
+            try {
+                return Integer.parseInt(matcher.group(1));
+            } catch (NumberFormatException ignored) {
+                return Integer.MAX_VALUE;
+            }
+        }
+        return Integer.MAX_VALUE;
+    }
+
+    private String sanitize(String value) {
+        return value == null ? "" : value;
     }
 
     private static OtdrTestResult.RtuHealth mapRtuHealth(RouteTelemetryRequest.RtuHealthRequest healthRequest) {

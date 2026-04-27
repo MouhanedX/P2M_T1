@@ -17,6 +17,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class RouteDataInitializer {
 
+        private static final int STANDARD_WAVELENGTH_NM = 1625;
+
     private final RouteRepository routeRepository;
 
     @Bean
@@ -77,6 +79,7 @@ public class RouteDataInitializer {
                         .lossDeviationDb(0.0)
                         .eventCount(spliceCount + 2)
                         .activeAlarms(0)
+                        .wavelengthNm(STANDARD_WAVELENGTH_NM)
                         .build())
                 .maintenance(Route.Maintenance.builder()
                         .lastMaintenanceDate(LocalDate.now().minusDays(30))

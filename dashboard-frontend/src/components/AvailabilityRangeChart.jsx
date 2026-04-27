@@ -249,18 +249,18 @@ function AvailabilityRangeChart({ history = [] }) {
     : 0;
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-sky-50/80 via-white to-indigo-50/70 p-5 shadow-2xl shadow-slate-400/45">
+    <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-sky-50/80 via-white to-indigo-50/70 p-5 shadow-2xl shadow-slate-400/45">
       <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-sky-300/20 blur-2xl" />
       <div className="pointer-events-none absolute -left-8 -bottom-8 h-24 w-24 rounded-full bg-white/40 blur-2xl" />
 
       <div className="relative">
         <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-2.5 text-blue-700 backdrop-blur-sm">
+            <div className="rounded-xl bg-blue-50 p-2.5 text-blue-700 shadow-sm backdrop-blur-sm">
               <BarChart3 className="h-5 w-5" />
             </div>
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Performance Curve</p>
+              <p className="text-[13px] font-semibold tracking-wide text-slate-800">Performance Curve</p>
               <h3 className="text-xl font-bold tracking-tight text-slate-900">Availability</h3>
               <p className="mt-1 text-sm text-slate-500">
                 Track historical availability as a smooth curve or switch to the daily range view.
@@ -268,15 +268,15 @@ function AvailabilityRangeChart({ history = [] }) {
             </div>
           </div>
 
-          <div className="rounded-xl border border-slate-200/80 bg-white/80 p-1 shadow-sm backdrop-blur-sm">
+          <div className="rounded-xl bg-white/80 p-1 shadow-sm backdrop-blur-sm">
             <div className="flex flex-wrap gap-1">
               <button
                 type="button"
                 onClick={() => setViewMode('trend')}
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   viewMode === 'trend'
-                    ? 'border border-blue-300 bg-blue-100/90 text-blue-800 shadow-sm'
-                    : 'border border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-800'
+                    ? 'bg-blue-100/90 text-blue-800 shadow-sm'
+                    : 'bg-transparent text-slate-600 hover:bg-white hover:text-slate-800'
                 }`}
               >
                 Trend Curve
@@ -286,8 +286,8 @@ function AvailabilityRangeChart({ history = [] }) {
                 onClick={() => setViewMode('envelope')}
                 className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
                   viewMode === 'envelope'
-                    ? 'border border-indigo-300 bg-indigo-100/90 text-indigo-800 shadow-sm'
-                    : 'border border-transparent bg-transparent text-slate-600 hover:border-slate-200 hover:bg-white hover:text-slate-800'
+                    ? 'bg-indigo-100/90 text-indigo-800 shadow-sm'
+                    : 'bg-transparent text-slate-600 hover:bg-white hover:text-slate-800'
                 }`}
               >
                 Daily Availability
@@ -303,10 +303,10 @@ function AvailabilityRangeChart({ history = [] }) {
                 key={option.key}
                 type="button"
                 onClick={() => setSelectedTrendRange(option.key)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
+                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
                   selectedTrendRange === option.key
-                    ? 'border-blue-300 bg-blue-100/90 text-blue-800 shadow-sm'
-                    : 'border-slate-200 bg-white/80 text-slate-600 hover:border-slate-300 hover:text-slate-800'
+                    ? 'bg-blue-100/90 text-blue-800 shadow-sm'
+                    : 'bg-white/80 text-slate-600 hover:bg-white hover:text-slate-800'
                 }`}
               >
                 {option.label}
@@ -328,7 +328,7 @@ function AvailabilityRangeChart({ history = [] }) {
         ) : null}
 
         {viewMode === 'trend' && trendSeries.length > 0 ? (
-          <div className="h-80 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-inner shadow-slate-100/80">
+          <div className="h-80 rounded-2xl bg-white/80 p-3 shadow-inner shadow-slate-100/80">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={trendSeries}

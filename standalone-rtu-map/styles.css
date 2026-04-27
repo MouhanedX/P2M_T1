@@ -777,3 +777,65 @@ body {
   color: #0f172a;
   margin-left: 12px;
 }
+
+body.embed-mode .topbar {
+  display: none !important;
+}
+
+body.embed-mode .map-layout,
+body.embed-mode .map-card,
+body.embed-mode #topology-map {
+  height: 100vh;
+}
+
+body.embed-mode .map-card {
+  border-radius: 0;
+}
+
+.alarm-focus-pulse {
+  background: transparent;
+}
+
+.alarm-pulse-dot {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid rgba(248, 113, 113, 0.85);
+  background: rgba(239, 68, 68, 0.15);
+  box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+  animation: alarmPulse 1.8s ease-out infinite;
+}
+
+@keyframes alarmPulse {
+  0% {
+    transform: scale(0.45);
+    opacity: 1;
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.52);
+  }
+  70% {
+    transform: scale(1.2);
+    opacity: 0.25;
+    box-shadow: 0 0 0 12px rgba(239, 68, 68, 0);
+  }
+  100% {
+    transform: scale(1.32);
+    opacity: 0;
+    box-shadow: 0 0 0 16px rgba(239, 68, 68, 0);
+  }
+}
+
+.alarm-focus-tooltip {
+  border: 0;
+  border-radius: 8px;
+  background: rgba(185, 28, 28, 0.94);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 4px 8px;
+  box-shadow: 0 10px 24px rgba(185, 28, 28, 0.35);
+}
+
+.alarm-focus-tooltip::before {
+  display: none;
+}

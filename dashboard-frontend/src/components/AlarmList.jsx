@@ -1,4 +1,4 @@
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, MapPinned } from 'lucide-react';
 import { alarmsAPI } from '../services/api';
 import { useState } from 'react';
 import clsx from 'clsx';
@@ -45,7 +45,7 @@ const parseTimestamp = (value) => {
   return null;
 };
 
-function AlarmList({ alarms, onRefresh }) {
+function AlarmList({ alarms, onRefresh, onViewMap }) {
   const [processing, setProcessing] = useState(null);
 
   const getSeverityBadge = (severity) => {
@@ -107,24 +107,32 @@ function AlarmList({ alarms, onRefresh }) {
               Created Date & Time
             </th>
             <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+              Map
+            </th>
+            <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
               Assign
             </th>
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {alarms.map((alarm) => {
+          {alarms.map((alarm, index) => {
             const alarmIdentifier = alarm.alarmId || alarm.alarm_id || alarm.id;
             const routeId = alarm.routeId || alarm.route_id || '-';
             const alarmType = alarm.alarmType || alarm.alarm_type || '-';
             const createdAtValue = alarm.lifecycle?.createdAt ?? alarm.lifecycle?.created_at ?? alarm.updatedAt ?? alarm.updated_at;
             const createdAtDate = parseTimestamp(createdAtValue);
             const lifecycle = alarm.lifecycle || {};
+            const status = String(alarm.status || '').toUpperCase();
             const acknowledged = Boolean(lifecycle.acknowledged);
-            const repairDuration = Number(lifecycle.repairDurationSeconds ?? lifecycle.repair_duration_seconds ?? 0);
-            const canAcknowledge = !acknowledged && repairDuration > 0;
+            const resolved = Boolean(lifecycle.resolved)
+              || status === 'RESOLVED'
+              || status === 'CLEARED'
+              || status === 'SUPPRESSED';
+            const canAcknowledge = !acknowledged && !resolved && Boolean(alarmIdentifier);
+            const rowKey = alarmIdentifier || `${routeId}-${alarmType}-${createdAtDate?.getTime() || index}`;
 
             return (
-              <tr key={alarmIdentifier || alarm.id} className="hover:bg-gray-50">
+              <tr key={rowKey} className="hover:bg-gray-50">
                 <td className="px-6 py-4 text-center">
                   <span className={clsx('badge', getSeverityBadge(alarm.severity))}>
                     {alarm.severity}
@@ -140,9 +148,28 @@ function AlarmList({ alarms, onRefresh }) {
                   {createdAtDate ? createdAtDate.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) : '-'}
                 </td>
                 <td className="px-6 py-4 text-center text-sm text-gray-500">
+                  {onViewMap && routeId !== '-' ? (
+                    <button
+                      type="button"
+                      onClick={() => onViewMap(alarm)}
+                      className="inline-flex items-center justify-center rounded-lg bg-cyan-100 p-2 text-cyan-700 transition-colors hover:bg-cyan-200"
+                      title="View alarm on topology map"
+                      aria-label="View alarm on topology map"
+                    >
+                      <MapPinned className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <span className="text-slate-400">-</span>
+                  )}
+                </td>
+                <td className="px-6 py-4 text-center text-sm text-gray-500">
                   {acknowledged ? (
                     <span className="inline-flex rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
                       Assigned
+                    </span>
+                  ) : resolved ? (
+                    <span className="inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                      Resolved
                     </span>
                   ) : canAcknowledge ? (
                     <button

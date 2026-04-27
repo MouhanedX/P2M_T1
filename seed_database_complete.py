@@ -33,7 +33,7 @@ RTUS_DATA = [
         "isMonitoring": True,
         "capabilities": {
             "maxFiberLengthKm": 100,
-            "wavelengths": [1310, 1550],
+            "wavelengths": [1625],
             "dynamicRangeDb": 40
         },
         "configuration": {
@@ -64,7 +64,7 @@ RTUS_DATA = [
         "isMonitoring": True,
         "capabilities": {
             "maxFiberLengthKm": 100,
-            "wavelengths": [1310, 1550],
+            "wavelengths": [1625],
             "dynamicRangeDb": 40
         },
         "configuration": {
@@ -95,7 +95,7 @@ RTUS_DATA = [
         "isMonitoring": True,
         "capabilities": {
             "maxFiberLengthKm": 100,
-            "wavelengths": [1310, 1550],
+            "wavelengths": [1625],
             "dynamicRangeDb": 40
         },
         "configuration": {
@@ -126,7 +126,7 @@ RTUS_DATA = [
         "isMonitoring": True,
         "capabilities": {
             "maxFiberLengthKm": 100,
-            "wavelengths": [1310, 1550],
+            "wavelengths": [1625],
             "dynamicRangeDb": 40
         },
         "configuration": {
@@ -157,7 +157,7 @@ RTUS_DATA = [
         "isMonitoring": True,
         "capabilities": {
             "maxFiberLengthKm": 100,
-            "wavelengths": [1310, 1550],
+            "wavelengths": [1625],
             "dynamicRangeDb": 40
         },
         "configuration": {

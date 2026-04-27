@@ -24,6 +24,8 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 public class AlarmService {
+
+    private static final int STANDARD_WAVELENGTH_NM = 1625;
     
     private final AlarmRepository alarmRepository;
     private final RouteRepository routeRepository;
@@ -426,10 +428,7 @@ public class AlarmService {
         };
 
         Double attenuationDb = request.getAttenuationDb();
-        Integer routeWavelengthNm = routeRepository.findByRouteId(alarm.getRouteId())
-                .map(Route::getCurrentCondition)
-                .map(Route.CurrentCondition::getWavelengthNm)
-                .orElse(1550);
+        Integer routeWavelengthNm = STANDARD_WAVELENGTH_NM;
         Double baselinePowerBudgetDb = routeRepository.findByRouteId(alarm.getRouteId())
                 .map(Route::getCurrentCondition)
                 .map(Route.CurrentCondition::getAveragePowerDb)

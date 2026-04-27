@@ -8,7 +8,8 @@ import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
 import AvailabilityRangeChart from './AvailabilityRangeChart';
-import { AlertCircle, Activity, Router, ShieldCheck, Clock3, Radar, ExternalLink, History, Download, X } from 'lucide-react';
+import StandaloneRouteMapFrame from './StandaloneRouteMapFrame';
+import { AlertCircle, Activity, Router, ShieldCheck, Clock3, Radar, ExternalLink, History, Download, X, MapPinned } from 'lucide-react';
 
 const TOPOLOGY_COLORS = ['#00d4aa', '#0084ff', '#00ff88', '#f97316', '#e11d48', '#a855f7', '#ffb700'];
 const RELIABILITY_TARGETS = {
@@ -16,6 +17,7 @@ const RELIABILITY_TARGETS = {
   mtbfHours: 720,
 };
 const RELIABILITY_RING_SEGMENT_COUNT = 18;
+const STANDARD_WAVELENGTH_NM = 1625;
 
 const toPolarPoint = (centerX, centerY, radius, angleDegrees) => {
   const radians = ((angleDegrees - 90) * Math.PI) / 180;
@@ -79,6 +81,40 @@ const ACTIVE_ALARM_STATUSES = new Set(['ACTIVE', 'ACKNOWLEDGED']);
 
 const isActiveAlarm = (alarm) => ACTIVE_ALARM_STATUSES.has(String(alarm?.status || '').toUpperCase());
 
+const extractAlarmIdentifier = (alarm) => alarm?.alarmId || alarm?.alarm_id || alarm?.id || null;
+
+const normalizeActiveAlarmFeed = (alarmList = [], limit = 50) => {
+  const source = Array.isArray(alarmList) ? alarmList : [];
+  const deduped = new Map();
+
+  source.forEach((alarm, index) => {
+    if (!isActiveAlarm(alarm)) {
+      return;
+    }
+
+    const createdAtMs = extractAlarmCreatedAt(alarm)?.getTime() || 0;
+    const alarmKey = extractAlarmIdentifier(alarm)
+      || `${alarm?.routeId || alarm?.route_id || 'route'}:${alarm?.alarmType || alarm?.alarm_type || 'type'}:${createdAtMs}:${index}`;
+
+    const existing = deduped.get(alarmKey);
+    if (!existing) {
+      deduped.set(alarmKey, alarm);
+      return;
+    }
+
+    const existingCreatedAtMs = extractAlarmCreatedAt(existing)?.getTime() || 0;
+    deduped.set(alarmKey, createdAtMs >= existingCreatedAtMs ? alarm : existing);
+  });
+
+  return [...deduped.values()]
+    .sort((left, right) => {
+      const leftCreatedAt = extractAlarmCreatedAt(left)?.getTime() || 0;
+      const rightCreatedAt = extractAlarmCreatedAt(right)?.getTime() || 0;
+      return rightCreatedAt - leftCreatedAt;
+    })
+    .slice(0, limit);
+};
+
 const calculateMttrHoursFromAlarms = (alarmHistory = [], sinceDate) => {
   const validDurationsSeconds = (Array.isArray(alarmHistory) ? alarmHistory : [])
     .map((alarm) => {
@@ -139,6 +175,8 @@ const toDateKey = (date) => {
   return `${year}-${month}-${day}`;
 };
 
+const normalizeRouteIdentifier = (value) => String(value || '').trim().toUpperCase();
+
 const getSeverityBadgeClass = (severity) => {
   switch (String(severity || '').toUpperCase()) {
     case 'CRITICAL':
@@ -182,34 +220,34 @@ const getRouteStatusPresentation = (status) => {
     case 'BROKEN':
     case 'FIBER_BREAK':
       return {
-        borderClass: 'border-red-500 hover:border-red-600',
+        surfaceClass: 'bg-gradient-to-br from-rose-50 via-white to-red-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-red-100 text-red-700',
       };
     case 'DEGRADATION':
     case 'DEGRADED':
     case 'HIGH_LOSS_SPLICE':
       return {
-        borderClass: 'border-orange-400 hover:border-orange-500',
+        surfaceClass: 'bg-gradient-to-br from-orange-50 via-white to-amber-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-orange-100 text-orange-700',
       };
     case 'NORMAL':
       return {
-        borderClass: 'border-emerald-400 hover:border-emerald-500',
+        surfaceClass: 'bg-gradient-to-br from-emerald-50 via-white to-green-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-emerald-100 text-emerald-700',
       };
     case 'MAINTENANCE':
       return {
-        borderClass: 'border-sky-400 hover:border-sky-500',
+        surfaceClass: 'bg-gradient-to-br from-sky-50 via-white to-cyan-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-sky-100 text-sky-700',
       };
     case 'UNKNOWN':
       return {
-        borderClass: 'border-slate-300 hover:border-slate-400',
+        surfaceClass: 'bg-gradient-to-br from-slate-100 via-white to-slate-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-slate-200 text-slate-700',
       };
     default:
       return {
-        borderClass: 'border-slate-300 hover:border-indigo-500',
+        surfaceClass: 'bg-gradient-to-br from-slate-100 via-white to-indigo-50 shadow-md hover:shadow-lg',
         badgeClass: 'bg-slate-200 text-slate-800',
       };
   }
@@ -275,6 +313,114 @@ const toFiniteNumber = (value) => {
   return Number.isFinite(numericValue) ? numericValue : null;
 };
 
+const normalizeIdentifierToken = (value) => normalizeRouteIdentifier(value).replace(/[^A-Z0-9]/g, '');
+
+const identifierMatches = (leftValue, rightValue) => {
+  const leftKey = normalizeRouteIdentifier(leftValue);
+  const rightKey = normalizeRouteIdentifier(rightValue);
+
+  if (!leftKey || !rightKey) {
+    return false;
+  }
+
+  if (leftKey === rightKey) {
+    return true;
+  }
+
+  const leftToken = normalizeIdentifierToken(leftKey);
+  const rightToken = normalizeIdentifierToken(rightKey);
+
+  if (!leftToken || !rightToken) {
+    return false;
+  }
+
+  return leftToken === rightToken || leftToken.includes(rightToken) || rightToken.includes(leftToken);
+};
+
+const extractAlarmFaultDistanceKm = (alarm) => {
+  const details = alarm?.details || {};
+
+  return toFiniteNumber(
+    details.eventLocationKm
+    ?? details.event_location_km
+    ?? details.eventDistanceKm
+    ?? details.event_distance_km
+    ?? details.faultDistanceKm
+    ?? details.fault_distance_km
+    ?? details.breakDistanceKm
+    ?? details.break_distance_km
+    ?? details.locationKm
+    ?? details.location_km
+    ?? alarm?.eventLocationKm
+    ?? alarm?.event_location_km
+    ?? alarm?.eventDistanceKm
+    ?? alarm?.event_distance_km
+    ?? alarm?.faultDistanceKm
+    ?? alarm?.fault_distance_km
+    ?? alarm?.breakDistanceKm
+    ?? alarm?.break_distance_km
+    ?? alarm?.locationKm
+    ?? alarm?.location_km
+  );
+};
+
+const extractAlarmRouteId = (alarm) => (
+  alarm?.routeId
+  || alarm?.route_id
+  || alarm?.route?.routeId
+  || alarm?.route?.route_id
+  || alarm?.details?.routeId
+  || alarm?.details?.route_id
+  || ''
+);
+
+const extractAlarmRouteName = (alarm) => (
+  alarm?.routeName
+  || alarm?.route_name
+  || alarm?.route?.routeName
+  || alarm?.route?.route_name
+  || alarm?.details?.routeName
+  || alarm?.details?.route_name
+  || ''
+);
+
+const extractAlarmRtuId = (alarm) => (
+  alarm?.rtuId
+  || alarm?.rtu_id
+  || alarm?.route?.rtuId
+  || alarm?.route?.rtu_id
+  || alarm?.details?.rtuId
+  || alarm?.details?.rtu_id
+  || ''
+);
+
+const routeMatchesAlarmContext = (route, routeHints = [], alarmRtuIdKey = '') => {
+  const routeCandidates = [
+    route?.routeId,
+    route?.route_id,
+    route?.id,
+    route?.routeName,
+    route?.route_name,
+  ].filter(Boolean);
+
+  const hintCandidates = (Array.isArray(routeHints) ? routeHints : []).filter(Boolean);
+
+  if (hintCandidates.length === 0) {
+    return false;
+  }
+
+  const hasRouteMatch = hintCandidates.some((hint) => routeCandidates.some((candidate) => identifierMatches(candidate, hint)));
+  if (!hasRouteMatch) {
+    return false;
+  }
+
+  if (!alarmRtuIdKey) {
+    return true;
+  }
+
+  return identifierMatches(route?.rtuId || route?.rtu_id, alarmRtuIdKey);
+};
+
 const resolvePowerBudgetDb = (test) => {
   const averagePowerValue = toFiniteNumber(test?.averagePowerDb);
   if (averagePowerValue !== null) {
@@ -316,7 +462,7 @@ const extractActiveRouteFault = (routeAlarms) => {
   return {
     alarmId: selectedAlarm?.alarmId || selectedAlarm?.alarm_id || selectedAlarm?.id || null,
     status: String(selectedAlarm?.status || ''),
-    faultDistanceKm: toFiniteNumber(details.eventLocationKm ?? details.event_location_km),
+    faultDistanceKm: extractAlarmFaultDistanceKm(selectedAlarm),
     attenuationDb: toFiniteNumber(
       details.attenuationDb
       ?? details.attenuation_db
@@ -387,17 +533,17 @@ const AvailabilityGaugeCard = ({ title = 'Network Availability', availabilityPer
   const tooltipY = Math.max(8, Math.min(62, needleTip.y - 34));
 
   return (
-    <div className="relative h-full overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/70 p-5 shadow-2xl shadow-slate-400/45">
+    <div className="relative h-full overflow-hidden rounded-3xl bg-gradient-to-br from-blue-50/80 via-white to-indigo-50/70 p-5 shadow-2xl shadow-slate-400/45">
       <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-blue-300/20 blur-2xl" />
       <div className="pointer-events-none absolute -left-8 -bottom-8 h-24 w-24 rounded-full bg-white/40 blur-2xl" />
 
-      <div className="absolute right-5 top-5 rounded-xl border border-blue-200 bg-blue-50 p-2.5 text-blue-700 backdrop-blur-sm">
+      <div className="absolute right-5 top-5 rounded-xl bg-blue-50 p-2.5 text-blue-700 shadow-sm backdrop-blur-sm">
         <Activity className="h-6 w-6" />
       </div>
 
       <div className="relative flex h-full min-h-[170px] flex-col">
         <div className="pr-16">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</p>
+          <p className="text-[13px] font-semibold tracking-wide text-slate-800">{title}</p>
         </div>
 
         <div className="mt-1 flex flex-1 flex-col items-center justify-center text-center">
@@ -483,13 +629,7 @@ const ReliabilityKpiCard = ({
     ? (valueHours <= goodThreshold ? 'good' : (valueHours <= warningThreshold ? 'warning' : 'bad'))
     : (valueHours >= goodThreshold ? 'good' : (valueHours >= warningThreshold ? 'warning' : 'bad'));
 
-  const statusLabel = statusTone === 'good' ? 'Good' : statusTone === 'warning' ? 'Normal' : 'Not good';
   const statusColor = statusTone === 'good' ? '#16a34a' : statusTone === 'warning' ? '#f59e0b' : '#ef4444';
-  const statusText = statusTone === 'good'
-    ? 'Target achieved'
-    : statusTone === 'warning'
-      ? 'Warning zone'
-      : 'Needs action';
 
   const zoneColors = lowerIsBetter
     ? ['#22c55e', '#f59e0b', '#ef4444']
@@ -516,32 +656,28 @@ const ReliabilityKpiCard = ({
       fill: zoneColors[zoneIndex],
     };
   });
-  const targetMarginHours = lowerIsBetter ? targetHours - valueHours : valueHours - targetHours;
-  const meetsTarget = targetMarginHours >= 0;
-  const marginLabel = `${Math.abs(targetMarginHours).toFixed(1)}h`;
-  const targetText = `${lowerIsBetter ? '<=' : '>='} ${targetHours.toFixed(1)}h`;
   const valueDisplay = valueHours >= 100
     ? Math.round(valueHours).toLocaleString()
     : valueHours.toFixed(1);
 
   return (
-    <div className={`relative h-full overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br ${surfaceClass} p-5 shadow-2xl shadow-slate-400/45`}>
+    <div className={`relative h-full overflow-hidden rounded-3xl bg-gradient-to-br ${surfaceClass} p-5 shadow-2xl shadow-slate-400/45`}>
       <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-cyan-300/25 blur-2xl" />
       <div className="pointer-events-none absolute -left-10 -bottom-10 h-28 w-28 rounded-full bg-rose-200/20 blur-2xl" />
 
       <div className="relative flex items-start justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</p>
+          <p className="text-[13px] font-semibold tracking-wide text-slate-800">{title}</p>
           <p className="mt-1 text-xs text-slate-500">
             {lowerIsBetter ? 'Mean Time To Repair' : 'Mean Time Between Failures'}
           </p>
         </div>
 
-        <div className={`rounded-xl border p-2.5 ${statusTone === 'good'
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+        <div className={`rounded-xl p-2.5 shadow-sm ${statusTone === 'good'
+          ? 'bg-emerald-50 text-emerald-600'
           : statusTone === 'warning'
-            ? 'border-amber-200 bg-amber-50 text-amber-600'
-            : 'border-rose-200 bg-rose-50 text-rose-600'}`}
+            ? 'bg-amber-50 text-amber-600'
+            : 'bg-rose-50 text-rose-600'}`}
         >
           {icon}
         </div>
@@ -569,28 +705,16 @@ const ReliabilityKpiCard = ({
           </svg>
 
           <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Current</p>
+            <p className="text-xs font-semibold tracking-[0.08em] text-slate-700">Current</p>
             <p className="text-3xl font-black tracking-tight text-indigo-600">{valueDisplay}</p>
             <p className="text-xs font-semibold text-teal-600">hours</p>
           </div>
         </div>
       </div>
 
-      <div className="relative mt-2 space-y-2">
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>Target {targetText}</span>
-          <span>{lowerIsBetter ? 'Lower is better' : 'Higher is better'}</span>
-        </div>
-
-        <p className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusTone === 'good'
-          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-          : statusTone === 'warning'
-            ? 'border-amber-200 bg-amber-50 text-amber-700'
-            : 'border-rose-200 bg-rose-50 text-rose-700'}`}
-        >
-          {statusLabel} • {statusText.toLowerCase()} • {meetsTarget ? 'margin' : 'gap'} {marginLabel}
-        </p>
-      </div>
+      <p className="relative mt-2 text-center text-xs font-medium text-slate-500">
+        {lowerIsBetter ? 'Lower is better' : 'Higher is better'}
+      </p>
     </div>
   );
 };
@@ -619,11 +743,12 @@ function Dashboard({ activeView, setActiveView }) {
   const [routeDistanceTraceLoading, setRouteDistanceTraceLoading] = useState(false);
   const [routeActiveFault, setRouteActiveFault] = useState(null);
   const [routeReferencePdfDownloading, setRouteReferencePdfDownloading] = useState(false);
+  const [selectedAlarmMapContext, setSelectedAlarmMapContext] = useState(null);
   const [selectedTopologyRtuId, setSelectedTopologyRtuId] = useState('');
 
-  // Lock page scroll while the route history modal is open.
+  // Lock page scroll while any fullscreen modal is open.
   useEffect(() => {
-    if (!selectedRouteHistory) {
+    if (!selectedRouteHistory && !selectedAlarmMapContext) {
       return undefined;
     }
 
@@ -645,7 +770,7 @@ function Dashboard({ activeView, setActiveView }) {
       body.style.overflow = previousBodyOverflow;
       body.style.paddingRight = previousBodyPaddingRight;
     };
-  }, [selectedRouteHistory]);
+  }, [selectedRouteHistory, selectedAlarmMapContext]);
 
   useEffect(() => {
     loadInitialData();
@@ -665,7 +790,7 @@ function Dashboard({ activeView, setActiveView }) {
 
       alarmSub = websocketService.subscribe('/topic/alarms', (alarm) => {
         console.log('New alarm received:', alarm);
-        setAlarms(prev => [alarm, ...prev].slice(0, 50));
+        setAlarms((prev) => normalizeActiveAlarmFeed([alarm, ...prev]));
         loadAlarmStatistics();
       });
 
@@ -745,7 +870,7 @@ function Dashboard({ activeView, setActiveView }) {
   const loadActiveAlarms = async () => {
     try {
       const response = await alarmsAPI.getActive();
-      setAlarms(response.data.slice(0, 50));
+      setAlarms(normalizeActiveAlarmFeed(normalizeList(response.data)));
     } catch (error) {
       console.error('Error loading alarms:', error);
     }
@@ -930,6 +1055,31 @@ function Dashboard({ activeView, setActiveView }) {
     setRouteDistanceTraceLoading(false);
     setRouteActiveFault(null);
     setRouteReferencePdfDownloading(false);
+  };
+
+  const openAlarmMapView = (alarm) => {
+    const alarmRouteId = extractAlarmRouteId(alarm);
+    const alarmRouteName = extractAlarmRouteName(alarm);
+    const alarmRtuId = extractAlarmRtuId(alarm);
+    const alarmFaultDistanceKm = extractAlarmFaultDistanceKm(alarm);
+
+    const routeMatch = routes.find(
+      (route) => routeMatchesAlarmContext(route, [alarmRouteId, alarmRouteName], alarmRtuId)
+    );
+
+    setSelectedAlarmMapContext({
+      alarm,
+      faultDistanceKm: alarmFaultDistanceKm,
+      route: routeMatch || {
+        routeId: alarmRouteId || alarmRouteName,
+        routeName: alarmRouteName || alarmRouteId || 'Unknown route',
+        rtuId: alarmRtuId || '-',
+      },
+    });
+  };
+
+  const closeAlarmMapView = () => {
+    setSelectedAlarmMapContext(null);
   };
 
   const handleDownloadReferencePdf = async () => {
@@ -1342,10 +1492,12 @@ function Dashboard({ activeView, setActiveView }) {
             <AvailabilityRangeChart history={availabilityHistory} />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="card shadow-lg hover:shadow-xl transition-shadow">
-                <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
-                  <Router className="w-5 h-5 text-blue-600" />
-                  <span>Route Status Distribution</span>
+              <div className="card bg-gradient-to-br from-white/95 via-slate-50/70 to-sky-50/45 shadow-lg ring-1 ring-slate-200/70 hover:shadow-xl transition-shadow">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-3 text-slate-900">
+                  <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+                    <Router className="w-5 h-5" />
+                  </span>
+                  <span>Route status distribution</span>
                 </h3>
                 <NetworkStatusChart kpi={kpi} />
               </div>
@@ -1384,7 +1536,7 @@ function Dashboard({ activeView, setActiveView }) {
                         type="button"
                         key={route.routeId}
                         onClick={() => openRouteHistory(route)}
-                        className={`rounded-xl border-2 ${statusPresentation.borderClass} bg-white p-4 shadow-md text-left transition-all hover:shadow-lg`}
+                        className={`rounded-2xl ${statusPresentation.surfaceClass} p-4 text-left transition-all duration-200 hover:-translate-y-0.5`}
                       >
                         <div className="flex items-start justify-between mb-2">
                           <div className="flex-1">
@@ -1458,6 +1610,21 @@ function Dashboard({ activeView, setActiveView }) {
                                 </span>
                               )}
                             </div>
+                          </div>
+
+                          <div className="mb-4 rounded-lg border border-slate-200 bg-white/75 p-3">
+                            <div className="mb-2 flex items-center gap-2">
+                              <MapPinned className="h-4 w-4 text-cyan-700" />
+                              <p className="text-xs font-semibold text-slate-800">Live optical topology map</p>
+                            </div>
+                            <StandaloneRouteMapFrame
+                              routeId={selectedRouteHistory?.routeId}
+                              routeName={selectedRouteHistory?.routeName}
+                              rtuId={selectedRouteHistory?.rtuId}
+                              faultDistanceKm={routeActiveFault?.faultDistanceKm}
+                              mapMode="route"
+                              className="h-[300px]"
+                            />
                           </div>
 
                           {routeDistanceTraceLoading ? (
@@ -1627,7 +1794,7 @@ function Dashboard({ activeView, setActiveView }) {
                                       <tr key={test.id || `${selectedRouteHistory.routeId}-${test.measuredAt || index}-${index}`} className="border-t border-slate-100">
                                         <td className="px-3 py-2 text-slate-700">{measuredAt ? measuredAt.toLocaleString() : '-'}</td>
                                         <td className="px-3 py-2 text-slate-600">{test.testMode || '-'}</td>
-                                        <td className="px-3 py-2 text-slate-600">{test.wavelengthNm != null ? `${test.wavelengthNm} nm` : '-'}</td>
+                                        <td className="px-3 py-2 text-slate-600">{`${STANDARD_WAVELENGTH_NM} nm`}</td>
                                         <td className="px-3 py-2 text-slate-700">
                                           {powerBudgetDb !== null ? `${powerBudgetDb.toFixed(3)} dB` : '-'}
                                         </td>
@@ -1656,12 +1823,68 @@ function Dashboard({ activeView, setActiveView }) {
               document.body
             )}
 
+            {selectedAlarmMapContext && createPortal(
+              <div
+                style={{ position: 'fixed', inset: 0, zIndex: 2147483647 }}
+                className="bg-slate-900/55 backdrop-blur-sm flex items-center justify-center p-4 overscroll-contain"
+              >
+                <div className="relative w-full max-w-4xl max-h-[85vh] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                  <button
+                    onClick={closeAlarmMapView}
+                    className="absolute right-4 top-4 z-20 rounded-lg border border-slate-300 bg-white/90 px-3 py-1.5 text-slate-700 shadow-sm backdrop-blur-sm hover:bg-slate-100 inline-flex items-center gap-1"
+                  >
+                    <X className="w-4 h-4" /> Close
+                  </button>
+
+                  <div className="px-5 py-4 max-h-[70vh] overflow-y-auto overscroll-contain space-y-4">
+                    <div className="rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-sm text-slate-700 shadow-sm">
+                      {(selectedAlarmMapContext.route?.routeId || selectedAlarmMapContext.alarm?.routeId || selectedAlarmMapContext.alarm?.route_id || '-')} • {(selectedAlarmMapContext.route?.rtuId || selectedAlarmMapContext.alarm?.rtuId || selectedAlarmMapContext.alarm?.rtu_id || '-')}
+                    </div>
+
+                    <StandaloneRouteMapFrame
+                      routeId={selectedAlarmMapContext.route?.routeId || selectedAlarmMapContext.alarm?.routeId || selectedAlarmMapContext.alarm?.route_id}
+                      routeName={selectedAlarmMapContext.route?.routeName || selectedAlarmMapContext.alarm?.routeName || selectedAlarmMapContext.alarm?.route_name}
+                      rtuId={selectedAlarmMapContext.route?.rtuId || selectedAlarmMapContext.alarm?.rtuId || selectedAlarmMapContext.alarm?.rtu_id}
+                      faultDistanceKm={selectedAlarmMapContext.faultDistanceKm}
+                      mapMode="alarm"
+                      className="h-[420px]"
+                    />
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-slate-700">Severity</p>
+                        <p className="text-sm font-bold text-slate-900">{selectedAlarmMapContext.alarm?.severity || '-'}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-slate-700">Status</p>
+                        <p className="text-sm font-bold text-slate-900">{selectedAlarmMapContext.alarm?.status || '-'}</p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-slate-700">Alarm type</p>
+                        <p className="text-sm font-bold text-slate-900">{selectedAlarmMapContext.alarm?.alarmType || selectedAlarmMapContext.alarm?.alarm_type || '-'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="sr-only">
+                    <button
+                      onClick={closeAlarmMapView}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-100 inline-flex items-center gap-1"
+                    >
+                      <X className="w-4 h-4" /> Close
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
             <div className="card shadow-lg">
               <h3 className="text-lg font-semibold mb-4 flex items-center space-x-2">
                 <AlertCircle className="w-5 h-5 text-red-600" />
                 <span>Active Alarms ({alarms.length})</span>
               </h3>
-              <AlarmList alarms={alarms} onRefresh={loadActiveAlarms} />
+              <AlarmList alarms={alarms} onRefresh={loadActiveAlarms} onViewMap={openAlarmMapView} />
             </div>
           </>
         )}
@@ -1728,7 +1951,7 @@ function Dashboard({ activeView, setActiveView }) {
               />
 
               <div
-                className={`rounded-3xl border-2 border-slate-900/90 p-5 shadow-[0_14px_35px_-22px_rgba(15,23,42,0.7)] bg-gradient-to-br ${
+                className={`rounded-3xl p-5 shadow-[0_20px_44px_-28px_rgba(15,23,42,0.62)] bg-gradient-to-br ${
                   powerSupplyIsNormal
                     ? 'from-emerald-50 via-white to-emerald-100'
                     : 'from-rose-50 via-white to-rose-100'
@@ -2047,7 +2270,7 @@ function Dashboard({ activeView, setActiveView }) {
                         <tr key={test.id || `${test.routeId}-${test.measuredAt}`} className="border-t border-slate-100">
                           <td className="py-2 pr-2 font-medium text-slate-700">{test.routeId}</td>
                           <td className="py-2 pr-2 text-slate-600">{test.testMode}</td>
-                          <td className="py-2 pr-2 text-slate-600">{test.wavelengthNm} nm</td>
+                          <td className="py-2 pr-2 text-slate-600">{`${STANDARD_WAVELENGTH_NM} nm`}</td>
                           <td className="py-2 pr-2">
                             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${test.testResult === 'Pass' ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                               {test.testResult}
@@ -2136,17 +2359,17 @@ function RtuHealthGaugeCard({
       : 'N/A';
 
   return (
-    <div className={`relative overflow-hidden rounded-3xl border-2 border-slate-900/90 bg-gradient-to-br ${theme.cardBg} p-5 shadow-[0_14px_35px_-22px_rgba(15,23,42,0.7)]`}>
+    <div className={`relative overflow-hidden rounded-3xl bg-gradient-to-br ${theme.cardBg} p-5 shadow-[0_20px_44px_-28px_rgba(15,23,42,0.62)]`}>
       <div className="mb-3 flex items-start justify-between gap-3">
-        <p className="text-sm font-semibold text-slate-600">{title}</p>
-        <span className={`rounded-full border border-white/70 bg-white/70 px-2.5 py-1 text-xs font-bold ${theme.badgeText}`}>
+        <p className="text-[13px] font-semibold tracking-wide text-slate-800">{title}</p>
+        <span className={`rounded-full bg-white/70 px-2.5 py-1 text-xs font-bold ${theme.badgeText}`}>
           {loading ? '...' : `${progressPercent.toFixed(0)}%`}
         </span>
       </div>
 
       <p className={`text-4xl font-bold tracking-tight ${theme.valueText}`}>{formattedValue}</p>
 
-      <div className="mt-3 h-24 rounded-2xl border border-white/70 bg-white/65 p-2 shadow-inner">
+      <div className="mt-3 h-24 rounded-2xl bg-white/65 p-2 shadow-inner">
         <svg viewBox="0 0 120 70" className="h-full w-full">
           <path
             d="M 15 60 A 45 45 0 0 1 105 60"

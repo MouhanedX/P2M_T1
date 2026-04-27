@@ -16,22 +16,22 @@ function KpiCard({
     blue: {
       surface: 'from-sky-50/80 via-white to-indigo-50/70',
       glow: 'bg-sky-300/20',
-      icon: 'bg-blue-50 border-blue-200 text-blue-600',
+      icon: 'bg-blue-50/95 text-blue-600 shadow-sm',
     },
     green: {
       surface: 'from-emerald-50/80 via-white to-cyan-50/70',
       glow: 'bg-emerald-300/25',
-      icon: 'bg-emerald-50 border-emerald-200 text-emerald-600',
+      icon: 'bg-emerald-50/95 text-emerald-600 shadow-sm',
     },
     yellow: {
       surface: 'from-amber-50/80 via-white to-yellow-50/70',
       glow: 'bg-amber-300/25',
-      icon: 'bg-amber-50 border-amber-200 text-amber-600',
+      icon: 'bg-amber-50/95 text-amber-600 shadow-sm',
     },
     red: {
       surface: 'from-rose-50/80 via-white to-orange-50/70',
       glow: 'bg-rose-300/25',
-      icon: 'bg-rose-50 border-rose-200 text-rose-600',
+      icon: 'bg-rose-50/95 text-rose-600 shadow-sm',
     },
   };
 
@@ -45,20 +45,20 @@ function KpiCard({
 
   return (
     <div className={clsx(
-      'relative overflow-hidden rounded-3xl border border-slate-200/80 bg-gradient-to-br shadow-2xl shadow-slate-400/45',
+      'relative overflow-hidden rounded-3xl bg-gradient-to-br shadow-2xl shadow-slate-400/45',
       compact ? 'p-4' : 'p-5',
       tone.surface
     )}>
       <div className={clsx('pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-2xl', tone.glow)} />
       <div className="pointer-events-none absolute -left-8 -bottom-8 h-24 w-24 rounded-full bg-white/40 blur-2xl" />
 
-      <div className={clsx('absolute rounded-xl border backdrop-blur-sm', tone.icon, compact ? 'right-4 top-4 p-2' : 'right-5 top-5 p-2.5')}>
+      <div className={clsx('absolute rounded-xl backdrop-blur-sm', tone.icon, compact ? 'right-4 top-4 p-2' : 'right-5 top-5 p-2.5')}>
         {icon}
       </div>
 
       <div className={clsx('relative flex h-full flex-col', compact ? 'min-h-[136px]' : 'min-h-[170px]')}>
         <div className={compact ? 'pr-14' : 'pr-16'}>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{title}</p>
+          <p className="text-[13px] font-semibold tracking-wide text-slate-800">{title}</p>
         </div>
 
         <div className="mt-4 flex flex-1 flex-col items-center justify-center text-center">

@@ -147,6 +147,43 @@ const formatLabel = (value) => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+const ROUTE_SUFFIX_PATTERN = /(?:^|_)R(\d+)(?:$|_)/i;
+
+const extractRouteOrder = (routeId) => {
+  const match = String(routeId || '').match(ROUTE_SUFFIX_PATTERN);
+  if (!match) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const order = Number.parseInt(match[1], 10);
+  return Number.isFinite(order) ? order : Number.POSITIVE_INFINITY;
+};
+
+const compareRouteIds = (leftRouteId, rightRouteId) => {
+  const orderDiff = extractRouteOrder(leftRouteId) - extractRouteOrder(rightRouteId);
+  if (orderDiff !== 0) {
+    return orderDiff;
+  }
+
+  return String(leftRouteId || '').localeCompare(String(rightRouteId || ''), undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  });
+};
+
+const compareRoutes = (leftRoute, rightRoute) => {
+  const rtuDiff = String(leftRoute?.rtuId || '').localeCompare(String(rightRoute?.rtuId || ''), undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  });
+
+  if (rtuDiff !== 0) {
+    return rtuDiff;
+  }
+
+  return compareRouteIds(leftRoute?.routeId, rightRoute?.routeId);
+};
+
 function TestControlPage({ configOnly = false }) {
   const latestConfigRequestRef = useRef(0);
   const [routes, setRoutes] = useState([]);
@@ -189,7 +226,9 @@ function TestControlPage({ configOnly = false }) {
   }, [routes]);
 
   const selectedRtuRoutes = useMemo(
-    () => routes.filter((route) => route.rtuId === form.rtuId),
+    () => routes
+      .filter((route) => route.rtuId === form.rtuId)
+      .sort((left, right) => compareRouteIds(left?.routeId, right?.routeId)),
     [routes, form.rtuId]
   );
 
@@ -256,9 +295,11 @@ function TestControlPage({ configOnly = false }) {
         alarmsAPI.getActive()
       ]);
 
-      const allRoutes = Array.isArray(routesResponse.data)
+      const allRoutes = (Array.isArray(routesResponse.data)
         ? routesResponse.data
-        : routesResponse.data.value || [];
+        : routesResponse.data.value || [])
+        .slice()
+        .sort(compareRoutes);
 
       const alarms = Array.isArray(alarmsResponse.data) ? alarmsResponse.data : [];
 
@@ -338,7 +379,9 @@ function TestControlPage({ configOnly = false }) {
     storeRtuId(value);
     const cachedConfig = getCachedRtuConfig(value);
 
-    const routeCandidates = routes.filter((route) => route.rtuId === value);
+    const routeCandidates = routes
+      .filter((route) => route.rtuId === value)
+      .sort((left, right) => compareRouteIds(left?.routeId, right?.routeId));
     const hasCachedRoute = cachedConfig?.routeId
       ? routeCandidates.some((route) => route.routeId === cachedConfig.routeId)
       : false;
@@ -587,7 +630,7 @@ function TestControlPage({ configOnly = false }) {
       )}
 
       {feedback?.type && (
-        <div className={`card border ${feedback.type === 'success' ? 'border-emerald-300 bg-emerald-50' : 'border-red-300 bg-red-50'}`}>
+        <div className={`card ${feedback.type === 'success' ? 'bg-emerald-50/95' : 'bg-red-50/95'}`}>
           <p className={`text-sm font-medium ${feedback.type === 'success' ? 'text-emerald-700' : 'text-red-700'}`}>
             {feedback.text}
           </p>

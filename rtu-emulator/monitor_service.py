@@ -1,18 +1,30 @@
 import asyncio
 import random
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from models import RouteInfo, TraceStatus, OTDRTestReport
 from otdr_simulator import OTDRSimulator
 from alarm_service import AlarmService
-from ems_client import EMSClient
+from ems_client import EMSClient    
 from mongodb_service import MongoDBService
 from kpi_service import KpiService
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+STANDARD_WAVELENGTH_NM = 1625
+ROUTE_SUFFIX_PATTERN = re.compile(r"(?:^|_)R(\d+)(?:$|_)", re.IGNORECASE)
+
+
+def route_sort_key(route_id: str) -> tuple[int, str]:
+    text = str(route_id or "")
+    match = ROUTE_SUFFIX_PATTERN.search(text)
+    if match:
+        return int(match.group(1)), text
+    return 10**9, text
 
 
 @dataclass
@@ -67,23 +79,23 @@ class MonitorService:
             return 25.0
 
         def extract_wavelength_nm(route_data: dict) -> int:
-            direct_wavelength = route_data.get("wavelengthNm")
-            if isinstance(direct_wavelength, (int, float)):
-                return int(direct_wavelength)
-
-            current_condition = route_data.get("currentCondition") or route_data.get("current_condition") or {}
-            condition_wavelength = current_condition.get("wavelengthNm") or current_condition.get("wavelength_nm")
-            if isinstance(condition_wavelength, (int, float)):
-                return int(condition_wavelength)
-
-            return 1550
+            _ = route_data
+            return STANDARD_WAVELENGTH_NM
 
         if settings.use_database_rtu:
             # Fetch routes from MongoDB for this RTU
             logger.info(f"Fetching routes from database for RTU {self.rtu_id}")
             db_routes = self.db_service.fetch_routes_for_rtu(self.rtu_id)
             
-            for route_data in db_routes:
+            for route_data in sorted(
+                db_routes,
+                key=lambda item: route_sort_key(
+                    item.get("routeId")
+                    or item.get("route_id")
+                    or item.get("id")
+                    or (str(item.get("_id")) if item.get("_id") is not None else "")
+                )
+            ):
                 route_id = (
                     route_data.get("routeId")
                     or route_data.get("route_id")
@@ -115,7 +127,7 @@ class MonitorService:
                 logger.info(f"Added route {route_id} ({distance_km} km) for RTU {self.rtu_id}")
         else:
             # Use legacy configuration-based routes
-            configured_routes = settings.get_routes_list()
+            configured_routes = sorted(settings.get_routes_list(), key=route_sort_key)
             
             for route_id in configured_routes:
                 config = OTDRSimulator.get_route_config(route_id)
@@ -128,7 +140,7 @@ class MonitorService:
                         current_status=TraceStatus.UNKNOWN,
                         active_alarms=0
                     )
-                    self.route_wavelength_nm[route_id] = 1550
+                    self.route_wavelength_nm[route_id] = STANDARD_WAVELENGTH_NM
         
         logger.info(f"Initialized {len(self.routes)} routes for monitoring on RTU {self.rtu_id}")
     
@@ -304,7 +316,7 @@ class MonitorService:
             test_mode=test_mode,
             pulse_width_ns=random.choice([100, 300, 1000, 3000]),
             dynamic_range_db=round(random.uniform(28.0, 40.0), 2),
-            wavelength_nm=self.route_wavelength_nm.get(route_id, 1550),
+            wavelength_nm=self.route_wavelength_nm.get(route_id, STANDARD_WAVELENGTH_NM),
             test_result="Pass" if trace.status == TraceStatus.NORMAL else "Fail",
             total_loss_db=trace.total_loss_db,
             event_count=len(trace.events),

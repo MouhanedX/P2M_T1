@@ -71,7 +71,7 @@
 
 @layer components {
   .card {
-    @apply bg-white/95 backdrop-blur-sm rounded-2xl shadow-md border-2 border-black p-6;
+    @apply relative rounded-3xl bg-gradient-to-br from-slate-50/85 via-white to-slate-100/70 p-6 shadow-[0_22px_48px_-30px_rgba(15,23,42,0.58)] backdrop-blur-sm;
   }
   
   .badge {

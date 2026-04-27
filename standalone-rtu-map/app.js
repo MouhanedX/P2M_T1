@@ -46,8 +46,12 @@ function chaikinSmooth(points, iterations = 2) {
   return refined;
 }
 
+function buildRouteAnchors(route, source) {
+  return [[source.lat, source.lng], ...(route.via || []), [route.lat, route.lng]];
+}
+
 function buildRoutePath(route, source) {
-  const anchors = [[source.lat, source.lng], ...(route.via || []), [route.lat, route.lng]];
+  const anchors = buildRouteAnchors(route, source);
   return chaikinSmooth(anchors, 2);
 }
 
@@ -74,6 +78,367 @@ function animatePropagation(pulseLines) {
 // Global storage for polylines
 const routePolylines = {};
 const backbonePolylines = {};
+const routePaths = {};
+const routeAnchorPaths = {};
+const routeEndpoints = {};
+const rtuMarkers = {};
+const rtuTooltips = {};
+
+function normalizeRouteId(value) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function normalizeRouteToken(value) {
+  return normalizeRouteId(value).replace(/[^A-Z0-9]/g, "");
+}
+
+function getFirstFiniteNumber(values) {
+  const sourceValues = Array.isArray(values) ? values : [];
+
+  for (const value of sourceValues) {
+    const numericValue = Number(value);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+  }
+
+  return null;
+}
+
+function parseMapQueryParams() {
+  const searchParams = new URLSearchParams(window.location.search);
+  const routeId = searchParams.get("routeId") || searchParams.get("route") || searchParams.get("route_id") || "";
+  const routeName = searchParams.get("routeName") || searchParams.get("route_name") || searchParams.get("to") || "";
+  const rtuId = searchParams.get("rtuId") || searchParams.get("rtu_id") || searchParams.get("sourceRtuId") || "";
+  const rawFaultDistance = getFirstFiniteNumber([
+    searchParams.get("faultDistanceKm"),
+    searchParams.get("fault_distance_km"),
+    searchParams.get("eventLocationKm"),
+    searchParams.get("event_location_km"),
+    searchParams.get("eventDistanceKm"),
+    searchParams.get("event_distance_km"),
+    searchParams.get("breakDistanceKm"),
+    searchParams.get("break_distance_km"),
+  ]);
+  const mapMode = searchParams.get("mapMode") || searchParams.get("view") || "";
+
+  const embedFromParam = searchParams.get("embed") === "1" || searchParams.get("mode") === "embed";
+  let inIframe = false;
+  try {
+    inIframe = window.self !== window.top;
+  } catch {
+    inIframe = true;
+  }
+
+  return {
+    routeId,
+    routeIdKey: normalizeRouteId(routeId),
+    routeIdToken: normalizeRouteToken(routeId),
+    routeName,
+    routeNameKey: normalizeRouteId(routeName),
+    routeNameToken: normalizeRouteToken(routeName),
+    rtuId,
+    rtuIdKey: normalizeRouteId(rtuId),
+    rtuIdToken: normalizeRouteToken(rtuId),
+    focus: searchParams.get("focus") !== "0",
+    embed: embedFromParam || inIframe,
+    mapMode,
+    faultDistanceKm: rawFaultDistance,
+  };
+}
+
+function applyEmbedMode(query) {
+  if (!query.embed) {
+    return;
+  }
+
+  document.body.classList.add("embed-mode");
+
+  const topbar = document.querySelector(".topbar");
+  if (topbar) {
+    topbar.style.display = "none";
+  }
+}
+
+function clamp(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function haversineDistanceKm(leftPoint, rightPoint) {
+  const toRadians = (degrees) => (degrees * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+
+  const latitudeDelta = toRadians(rightPoint[0] - leftPoint[0]);
+  const longitudeDelta = toRadians(rightPoint[1] - leftPoint[1]);
+
+  const leftLatitude = toRadians(leftPoint[0]);
+  const rightLatitude = toRadians(rightPoint[0]);
+
+  const a = (Math.sin(latitudeDelta / 2) ** 2)
+    + (Math.cos(leftLatitude) * Math.cos(rightLatitude) * (Math.sin(longitudeDelta / 2) ** 2));
+
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(a));
+}
+
+function interpolatePointAlongPath(path, ratio) {
+  if (!Array.isArray(path) || path.length === 0) {
+    return null;
+  }
+
+  if (path.length === 1) {
+    return path[0];
+  }
+
+  const clampedRatio = clamp(ratio, 0, 1);
+  const segmentLengths = [];
+  let totalLengthKm = 0;
+
+  for (let index = 1; index < path.length; index += 1) {
+    const segmentLengthKm = haversineDistanceKm(path[index - 1], path[index]);
+    segmentLengths.push(segmentLengthKm);
+    totalLengthKm += segmentLengthKm;
+  }
+
+  if (totalLengthKm <= 0) {
+    return path[Math.floor((path.length - 1) * clampedRatio)];
+  }
+
+  const targetDistanceKm = totalLengthKm * clampedRatio;
+  let traversedDistanceKm = 0;
+
+  for (let index = 1; index < path.length; index += 1) {
+    const segmentLengthKm = segmentLengths[index - 1];
+    if ((traversedDistanceKm + segmentLengthKm) >= targetDistanceKm) {
+      const localRatio = segmentLengthKm > 0
+        ? (targetDistanceKm - traversedDistanceKm) / segmentLengthKm
+        : 0;
+      const leftPoint = path[index - 1];
+      const rightPoint = path[index];
+
+      return [
+        leftPoint[0] + ((rightPoint[0] - leftPoint[0]) * localRatio),
+        leftPoint[1] + ((rightPoint[1] - leftPoint[1]) * localRatio),
+      ];
+    }
+
+    traversedDistanceKm += segmentLengthKm;
+  }
+
+  return path[path.length - 1];
+}
+
+function routeMatchesHint(route, hintKey, hintToken) {
+  if (!hintKey && !hintToken) {
+    return false;
+  }
+
+  const routeIdKey = normalizeRouteId(route?.id);
+  const routeToKey = normalizeRouteId(route?.to);
+  if (hintKey && (routeIdKey === hintKey || routeToKey === hintKey)) {
+    return true;
+  }
+
+  if (!hintToken) {
+    return false;
+  }
+
+  const routeIdToken = normalizeRouteToken(route?.id);
+  const routeToToken = normalizeRouteToken(route?.to);
+
+  return [routeIdToken, routeToToken].some((token) => token
+    && (token === hintToken || token.includes(hintToken) || hintToken.includes(token)));
+}
+
+function resolveSelectedRoute(query) {
+  const hasRouteHint = query.routeIdKey || query.routeNameKey || query.routeIdToken || query.routeNameToken;
+
+  const rtuFilteredRoutes = routes.filter((route) => {
+    if (!query.rtuIdKey) {
+      return true;
+    }
+    return normalizeRouteId(route.rtuId) === query.rtuIdKey;
+  });
+
+  const constrainedRoutes = rtuFilteredRoutes.length > 0 ? rtuFilteredRoutes : routes;
+  const routeHints = [
+    { key: query.routeIdKey, token: query.routeIdToken },
+    { key: query.routeNameKey, token: query.routeNameToken },
+  ];
+
+  if (hasRouteHint) {
+    for (const hint of routeHints) {
+      const selectedInConstrained = constrainedRoutes.find((route) => routeMatchesHint(route, hint.key, hint.token));
+      if (selectedInConstrained) {
+        return selectedInConstrained;
+      }
+    }
+
+    for (const hint of routeHints) {
+      const selectedInAll = routes.find((route) => routeMatchesHint(route, hint.key, hint.token));
+      if (selectedInAll) {
+        return selectedInAll;
+      }
+    }
+  }
+
+  if (constrainedRoutes.length === 1) {
+    return constrainedRoutes[0];
+  }
+
+  return null;
+}
+
+function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
+  const selectedRoute = resolveSelectedRoute(query);
+
+  if (!selectedRoute) {
+    return null;
+  }
+
+  const selectedRtuIdKey = normalizeRouteId(selectedRoute.rtuId);
+
+  routes.forEach((route) => {
+    const layers = routePolylines[route.id] || [];
+    const isSelected = route.id === selectedRoute.id;
+
+    layers.forEach((layer) => {
+      if (!layer || typeof layer.setStyle !== "function") {
+        return;
+      }
+
+      const baseOpacity = Number(layer.options?.opacity ?? 1);
+      const baseWeight = Number(layer.options?.weight ?? 2);
+
+      if (isSelected) {
+        layer.setStyle({
+          opacity: Math.max(baseOpacity, 0.9),
+          weight: baseWeight + (baseWeight >= 5 ? 0.6 : 1.2),
+        });
+      } else {
+        if (query.embed && query.focus && routeLayer.hasLayer(layer)) {
+          routeLayer.removeLayer(layer);
+        } else {
+          layer.setStyle({
+            opacity: Math.min(baseOpacity, 0.12),
+          });
+        }
+      }
+    });
+
+    const label = routePolylines[`${route.id}_label`];
+    if (label) {
+      if (isSelected && query.focus && routeLayer && !routeLayer.hasLayer(label)) {
+        label.addTo(routeLayer);
+      } else if (!isSelected && query.embed && query.focus && routeLayer.hasLayer(label)) {
+        routeLayer.removeLayer(label);
+      } else if (typeof label.setOpacity === "function") {
+        label.setOpacity(isSelected ? 1 : 0.15);
+      }
+    }
+
+    const endpointMarker = routeEndpoints[route.id];
+    if (endpointMarker) {
+      if (!isSelected && query.embed && query.focus && routeLayer.hasLayer(endpointMarker)) {
+        routeLayer.removeLayer(endpointMarker);
+      } else if (isSelected && query.embed && query.focus && !routeLayer.hasLayer(endpointMarker)) {
+        endpointMarker.addTo(routeLayer);
+      }
+    }
+  });
+
+  Object.entries(rtuMarkers).forEach(([rtuId, marker]) => {
+    const isSelectedRtu = normalizeRouteId(rtuId) === selectedRtuIdKey;
+    if (query.embed && query.focus) {
+      if (!isSelectedRtu && map.hasLayer(marker)) {
+        map.removeLayer(marker);
+      }
+      if (!isSelectedRtu && rtuTooltips[rtuId] && map.hasLayer(rtuTooltips[rtuId])) {
+        map.removeLayer(rtuTooltips[rtuId]);
+      }
+    } else if (!isSelectedRtu && typeof marker.setOpacity === "function") {
+      marker.setOpacity(0.2);
+    }
+  });
+
+  const selectedPath = routePaths[selectedRoute.id] || [];
+  const selectedAnchorPath = routeAnchorPaths[selectedRoute.id] || selectedPath;
+  if (query.focus && selectedPath.length > 1) {
+    map.fitBounds(L.latLngBounds(selectedPath), {
+      padding: [20, 20],
+      maxZoom: query.mapMode === "alarm" ? 15 : 14,
+    });
+  }
+
+  const routeDistanceKm = Number(selectedRoute.distanceKm);
+  const hasPreciseFault = Number.isFinite(query.faultDistanceKm)
+    && Number.isFinite(routeDistanceKm)
+    && routeDistanceKm > 0;
+
+  const markerRatio = hasPreciseFault
+    ? clamp(query.faultDistanceKm / routeDistanceKm, 0, 1)
+    : 0.5;
+  const markerPoint = interpolatePointAlongPath(selectedAnchorPath, markerRatio);
+  if (!markerPoint) {
+    return selectedRoute.id;
+  }
+
+  const markerLatLng = L.latLng(markerPoint[0], markerPoint[1]);
+
+  L.circleMarker(markerLatLng, {
+    radius: 16,
+    color: "#ef4444",
+    weight: 2,
+    fillColor: "#ef4444",
+    fillOpacity: 0.14,
+    interactive: false,
+    className: "alarm-focus-ring",
+  }).addTo(routeLayer);
+
+  L.circleMarker(markerLatLng, {
+    radius: 7,
+    color: "#ffffff",
+    weight: 2,
+    fillColor: "#ef4444",
+    fillOpacity: 1,
+    interactive: false,
+    className: "alarm-focus-core",
+  }).addTo(routeLayer);
+
+  L.marker(markerLatLng, {
+    interactive: false,
+    icon: L.divIcon({
+      className: "alarm-focus-pulse",
+      html: '<span class="alarm-pulse-dot"></span>',
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+    }),
+  })
+    .bindTooltip(
+      hasPreciseFault
+        ? `Alarm point: ${query.faultDistanceKm.toFixed(2)} km`
+        : "Alarm location (distance unavailable)",
+      {
+      permanent: true,
+      direction: "top",
+      offset: [0, -10],
+      className: "alarm-focus-tooltip",
+      }
+    )
+    .addTo(routeLayer);
+
+  if (query.focus) {
+    const focusZoom = query.mapMode === "alarm" ? 14 : 13;
+    map.flyTo(markerLatLng, Math.max(map.getZoom(), focusZoom), {
+      animate: true,
+      duration: 0.6,
+    });
+  }
+
+  return selectedRoute.id;
+}
+
+const MAP_QUERY = parseMapQueryParams();
+applyEmbedMode(MAP_QUERY);
 
 function initMap() {
   const map = L.map("topology-map", {
@@ -101,7 +466,10 @@ function initMap() {
     const source = rtus.find((rtu) => rtu.id === route.rtuId);
     if (!source) return;
 
+    const anchorPath = buildRouteAnchors(route, source);
     const path = buildRoutePath(route, source);
+    routeAnchorPaths[route.id] = anchorPath;
+    routePaths[route.id] = path;
     const routePolysList = [];
 
     // Deep shadow layer for depth
@@ -192,14 +560,16 @@ function initMap() {
     label.addTo(routeLayer);
 
     // Endpoint marker (non-draggable)
-    L.circleMarker([route.lat, route.lng], {
+    const endpointMarker = L.circleMarker([route.lat, route.lng], {
       radius: 6,
       color: source.color,
       fillColor: source.color,
       fillOpacity: 0.9,
       weight: 2,
       className: "route-endpoint"
-    })
+    });
+
+    endpointMarker
       .bindPopup(
         `<div class="popup-container">
           <div class="popup-header" style="border-left-color: ${source.color}">
@@ -224,6 +594,8 @@ function initMap() {
         </div>`
       )
       .addTo(routeLayer);
+
+    routeEndpoints[route.id] = endpointMarker;
   });
 
 
@@ -265,7 +637,9 @@ function initMap() {
       </div>`)
       .addTo(rtuLayer);
 
-    L.tooltip({
+    rtuMarkers[rtu.id] = marker;
+
+    const rtuTooltip = L.tooltip({
       permanent: true,
       direction: "right",
       offset: [14, 0],
@@ -274,10 +648,30 @@ function initMap() {
       .setLatLng([rtu.lat, rtu.lng])
       .setContent(`<strong>${rtu.id}</strong> ${rtu.city}`)
       .addTo(rtuLayer);
+
+    rtuTooltips[rtu.id] = rtuTooltip;
   });
+
+  const focusedRouteId = applyRouteFocusAndAlarmMarker(map, routeLayer, MAP_QUERY);
 
   // Zoom-based label visibility
   function updateLabelVisibility() {
+    if (MAP_QUERY.embed && MAP_QUERY.focus && focusedRouteId) {
+      routes.forEach((route) => {
+        const label = routePolylines[`${route.id}_label`];
+        if (!label) {
+          return;
+        }
+
+        if (route.id === focusedRouteId) {
+          label.addTo(routeLayer);
+        } else {
+          label.removeFrom(routeLayer);
+        }
+      });
+      return;
+    }
+
     const zoomLevel = map.getZoom();
     const showLabels = zoomLevel >= 10;
     
