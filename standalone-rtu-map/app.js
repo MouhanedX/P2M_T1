@@ -55,9 +55,8 @@ function buildRoutePath(route, source) {
   return chaikinSmooth(anchors, 2);
 }
 
-function getMidPoint(path) {
-  const midIndex = Math.floor(path.length / 2);
-  return L.latLng(path[midIndex][0], path[midIndex][1]);
+function getRouteLabelPoint(path) {
+  return interpolatePointAlongPath(path, 0.95);
 }
 
 function animatePropagation(pulseLines) {
@@ -83,6 +82,14 @@ const routeAnchorPaths = {};
 const routeEndpoints = {};
 const rtuMarkers = {};
 const rtuTooltips = {};
+const alarmMarkers = []; // Storage for alarm indicator markers
+let currentMap = null;
+let currentRouteLayer = null;
+let currentQuery = null;
+
+const ALARM_MARKER_COLOR = "#f59e0b";
+const ALARM_MARKER_BORDER_COLOR = "#ffffff";
+const ALARM_MARKER_FILL_COLOR = "#f59e0b";
 
 function normalizeRouteId(value) {
   return String(value || "").trim().toUpperCase();
@@ -113,6 +120,8 @@ function parseMapQueryParams() {
   const rawFaultDistance = getFirstFiniteNumber([
     searchParams.get("faultDistanceKm"),
     searchParams.get("fault_distance_km"),
+    searchParams.get("faultLocationKm"),
+    searchParams.get("fault_location_km"),
     searchParams.get("eventLocationKm"),
     searchParams.get("event_location_km"),
     searchParams.get("eventDistanceKm"),
@@ -178,6 +187,20 @@ function haversineDistanceKm(leftPoint, rightPoint) {
     + (Math.cos(leftLatitude) * Math.cos(rightLatitude) * (Math.sin(longitudeDelta / 2) ** 2));
 
   return 2 * earthRadiusKm * Math.asin(Math.sqrt(a));
+}
+
+function calculatePathLengthKm(path) {
+  if (!Array.isArray(path) || path.length < 2) {
+    return 0;
+  }
+
+  let totalLengthKm = 0;
+
+  for (let index = 1; index < path.length; index += 1) {
+    totalLengthKm += haversineDistanceKm(path[index - 1], path[index]);
+  }
+
+  return totalLengthKm;
 }
 
 function interpolatePointAlongPath(path, ratio) {
@@ -296,6 +319,7 @@ function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
   }
 
   const selectedRtuIdKey = normalizeRouteId(selectedRoute.rtuId);
+  const alarmView = query.embed && query.focus && query.mapMode === "alarm";
 
   routes.forEach((route) => {
     const layers = routePolylines[route.id] || [];
@@ -310,11 +334,21 @@ function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
       const baseWeight = Number(layer.options?.weight ?? 2);
 
       if (isSelected) {
+        if (!routeLayer.hasLayer(layer)) {
+          layer.addTo(routeLayer);
+        }
         layer.setStyle({
           opacity: Math.max(baseOpacity, 0.9),
           weight: baseWeight + (baseWeight >= 5 ? 0.6 : 1.2),
         });
+      } else if (alarmView) {
+        if (routeLayer.hasLayer(layer)) {
+          routeLayer.removeLayer(layer);
+        }
       } else {
+        if (!routeLayer.hasLayer(layer)) {
+          layer.addTo(routeLayer);
+        }
         if (query.embed && query.focus && routeLayer.hasLayer(layer)) {
           routeLayer.removeLayer(layer);
         } else {
@@ -327,21 +361,26 @@ function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
 
     const label = routePolylines[`${route.id}_label`];
     if (label) {
-      if (isSelected && query.focus && routeLayer && !routeLayer.hasLayer(label)) {
+      if (isSelected) {
         label.addTo(routeLayer);
-      } else if (!isSelected && query.embed && query.focus && routeLayer.hasLayer(label)) {
+      } else if (alarmView || (query.embed && query.focus)) {
         routeLayer.removeLayer(label);
       } else if (typeof label.setOpacity === "function") {
-        label.setOpacity(isSelected ? 1 : 0.15);
+        if (!routeLayer.hasLayer(label)) {
+          label.addTo(routeLayer);
+        }
+        label.setOpacity(0.15);
       }
     }
 
     const endpointMarker = routeEndpoints[route.id];
     if (endpointMarker) {
-      if (!isSelected && query.embed && query.focus && routeLayer.hasLayer(endpointMarker)) {
-        routeLayer.removeLayer(endpointMarker);
-      } else if (isSelected && query.embed && query.focus && !routeLayer.hasLayer(endpointMarker)) {
+      if (isSelected) {
         endpointMarker.addTo(routeLayer);
+      } else if (alarmView || (query.embed && query.focus)) {
+        if (routeLayer.hasLayer(endpointMarker)) {
+          routeLayer.removeLayer(endpointMarker);
+        }
       }
     }
   });
@@ -362,6 +401,7 @@ function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
 
   const selectedPath = routePaths[selectedRoute.id] || [];
   const selectedAnchorPath = routeAnchorPaths[selectedRoute.id] || selectedPath;
+  const selectedRenderablePath = selectedPath.length > 1 ? selectedPath : selectedAnchorPath;
   if (query.focus && selectedPath.length > 1) {
     map.fitBounds(L.latLngBounds(selectedPath), {
       padding: [20, 20],
@@ -369,62 +409,122 @@ function applyRouteFocusAndAlarmMarker(map, routeLayer, query) {
     });
   }
 
-  const routeDistanceKm = Number(selectedRoute.distanceKm);
-  const hasPreciseFault = Number.isFinite(query.faultDistanceKm)
-    && Number.isFinite(routeDistanceKm)
-    && routeDistanceKm > 0;
+  // Clear previous alarm markers
+  alarmMarkers.forEach((marker) => {
+    if (routeLayer.hasLayer(marker)) {
+      routeLayer.removeLayer(marker);
+    }
+  });
+  alarmMarkers.length = 0;
 
-  const markerRatio = hasPreciseFault
-    ? clamp(query.faultDistanceKm / routeDistanceKm, 0, 1)
-    : 0.5;
-  const markerPoint = interpolatePointAlongPath(selectedAnchorPath, markerRatio);
+  // Calculate alarm indicator position using the route's declared length so the
+  // fault stays proportional even when the drawn geometry is stylized.
+  const routeDistanceKm = Number(selectedRoute.distanceKm);
+  const computedRouteLengthKm = calculatePathLengthKm(selectedAnchorPath);
+  const routeLengthKm = Number.isFinite(routeDistanceKm) && routeDistanceKm > 0
+    ? routeDistanceKm
+    : computedRouteLengthKm;
+  const faultDistanceKmValue = Number.isFinite(query.faultDistanceKm)
+    ? Number(query.faultDistanceKm)
+    : null;
+  const hasPreciseFault = Number.isFinite(faultDistanceKmValue)
+    && Number.isFinite(routeLengthKm)
+    && routeLengthKm > 0;
+
+  console.log("Alarm marker calculation:", {
+    routeId: selectedRoute.id,
+    faultDistanceKm: faultDistanceKmValue,
+    routeDistanceKm,
+    computedRouteLengthKm,
+    routeLengthKm,
+    hasPreciseFault,
+    viaLength: (selectedRoute.via || []).length
+  });
+
+  let markerPoint = null;
+  
+  if (hasPreciseFault) {
+    // Interpolate across the rendered route path so the marker stays on the visible line.
+    const markerRatio = clamp(faultDistanceKmValue / routeLengthKm, 0, 1);
+    markerPoint = interpolatePointAlongPath(selectedRenderablePath, markerRatio);
+    console.log("Marker positioned from cumulative route distance:", {
+      markerRatio,
+      markerPoint,
+    });
+  } else if (selectedRenderablePath.length > 0) {
+    // No fault distance, show middle of route
+    markerPoint = selectedRenderablePath[Math.floor(selectedRenderablePath.length / 2)];
+    console.log("No fault distance, using middle of route:", { markerPoint });
+  }
+
   if (!markerPoint) {
+    console.log("No marker point calculated");
     return selectedRoute.id;
   }
 
   const markerLatLng = L.latLng(markerPoint[0], markerPoint[1]);
+  console.log("Creating alarm markers at:", { lat: markerPoint[0], lng: markerPoint[1] });
 
-  L.circleMarker(markerLatLng, {
-    radius: 16,
-    color: "#ef4444",
-    weight: 2,
-    fillColor: "#ef4444",
-    fillOpacity: 0.14,
+  // Outer ring
+  const outerRing = L.circleMarker(markerLatLng, {
+    radius: 20,
+    color: ALARM_MARKER_COLOR,
+    weight: 3,
+    fillColor: ALARM_MARKER_FILL_COLOR,
+    fillOpacity: 0.18,
     interactive: false,
     className: "alarm-focus-ring",
+    pane: "markerPane"
   }).addTo(routeLayer);
+  alarmMarkers.push(outerRing);
+  if (typeof outerRing.bringToFront === "function") {
+    outerRing.bringToFront();
+  }
+  console.log("Outer ring marker added");
 
-  L.circleMarker(markerLatLng, {
-    radius: 7,
-    color: "#ffffff",
+  // Inner circle
+  const innerCircle = L.circleMarker(markerLatLng, {
+    radius: 9,
+    color: ALARM_MARKER_BORDER_COLOR,
     weight: 2,
-    fillColor: "#ef4444",
+    fillColor: ALARM_MARKER_FILL_COLOR,
     fillOpacity: 1,
     interactive: false,
     className: "alarm-focus-core",
+    pane: "markerPane"
   }).addTo(routeLayer);
+  alarmMarkers.push(innerCircle);
+  if (typeof innerCircle.bringToFront === "function") {
+    innerCircle.bringToFront();
+  }
+  console.log("Inner circle marker added");
 
-  L.marker(markerLatLng, {
+  // Animated pulse marker
+  const pulseMarker = L.marker(markerLatLng, {
     interactive: false,
+    zIndexOffset: 2500,
     icon: L.divIcon({
       className: "alarm-focus-pulse",
       html: '<span class="alarm-pulse-dot"></span>',
-      iconSize: [26, 26],
-      iconAnchor: [13, 13],
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
     }),
+    pane: "markerPane"
   })
     .bindTooltip(
       hasPreciseFault
-        ? `Alarm point: ${query.faultDistanceKm.toFixed(2)} km`
+        ? `Fault marker: ${faultDistanceKmValue.toFixed(2)} km`
         : "Alarm location (distance unavailable)",
       {
       permanent: true,
       direction: "top",
-      offset: [0, -10],
+      offset: [0, -18],
       className: "alarm-focus-tooltip",
       }
     )
     .addTo(routeLayer);
+  alarmMarkers.push(pulseMarker);
+  console.log("Pulse marker added", { totalMarkers: alarmMarkers.length });
 
   if (query.focus) {
     const focusZoom = query.mapMode === "alarm" ? 14 : 13;
@@ -542,8 +642,8 @@ function initMap() {
 
     routePolylines[route.id] = routePolysList;
 
-    const midpoint = getMidPoint(path);
-    const label = L.marker(midpoint, {
+    const labelPoint = getRouteLabelPoint(path);
+    const label = L.marker(labelPoint, {
       interactive: false,
       icon: L.divIcon({
         className: "distance-label",
@@ -653,6 +753,11 @@ function initMap() {
   });
 
   const focusedRouteId = applyRouteFocusAndAlarmMarker(map, routeLayer, MAP_QUERY);
+  
+  // Store global references for updates
+  currentMap = map;
+  currentRouteLayer = routeLayer;
+  currentQuery = MAP_QUERY;
 
   // Zoom-based label visibility
   function updateLabelVisibility() {
@@ -665,7 +770,7 @@ function initMap() {
 
         if (route.id === focusedRouteId) {
           label.addTo(routeLayer);
-        } else {
+        } else if (routeLayer.hasLayer(label)) {
           label.removeFrom(routeLayer);
         }
       });
@@ -700,5 +805,42 @@ function updateKpisAndLists() {
   document.getElementById("kpi-routes").textContent = `${routes.length} Routes`;
 }
 
+function updateMapAlarmFocus() {
+  if (!currentMap || !currentRouteLayer || !currentQuery) {
+    return;
+  }
+
+  const updatedQuery = parseMapQueryParams();
+  
+  // Check if query parameters have changed
+  const hasChanged = (
+    updatedQuery.faultDistanceKm !== currentQuery.faultDistanceKm ||
+    updatedQuery.routeIdKey !== currentQuery.routeIdKey ||
+    updatedQuery.routeNameKey !== currentQuery.routeNameKey ||
+    updatedQuery.rtuIdKey !== currentQuery.rtuIdKey
+  );
+
+  if (hasChanged) {
+    console.log("Query parameters changed, updating map focus and alarm marker:", updatedQuery);
+    currentQuery = updatedQuery;
+    applyRouteFocusAndAlarmMarker(currentMap, currentRouteLayer, updatedQuery);
+  }
+}
+
 initMap();
 updateKpisAndLists();
+
+// Monitor URL changes and update map when parameters change
+// This handles iframe URL parameter updates from the dashboard
+let lastSearchParams = window.location.search;
+const urlCheckInterval = setInterval(() => {
+  if (window.location.search !== lastSearchParams) {
+    lastSearchParams = window.location.search;
+    updateMapAlarmFocus();
+  }
+}, 500); // Check every 500ms
+
+// Also listen for popstate event (browser back/forward buttons)
+window.addEventListener('popstate', () => {
+  updateMapAlarmFocus();
+});

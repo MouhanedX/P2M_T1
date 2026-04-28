@@ -12,8 +12,12 @@ const getRouteKey = (value) => String(value || '').trim().toUpperCase();
 const getAlarmFaultDistanceKm = (alarm) => toFiniteNumber(
   alarm?.details?.eventLocationKm
   ?? alarm?.details?.event_location_km
+  ?? alarm?.details?.faultLocationKm
+  ?? alarm?.details?.fault_location_km
   ?? alarm?.faultDistanceKm
   ?? alarm?.fault_distance_km
+  ?? alarm?.faultLocationKm
+  ?? alarm?.fault_location_km
 );
 
 const getProjectionBounds = () => {

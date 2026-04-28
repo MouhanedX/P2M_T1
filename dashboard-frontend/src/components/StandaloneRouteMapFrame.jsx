@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 
 const toFiniteNumber = (value) => {
   const numericValue = Number(value);
@@ -13,6 +13,8 @@ function StandaloneRouteMapFrame({
   mapMode = 'route',
   className = 'h-[320px]'
 }) {
+  const cacheBustRef = useRef(Date.now());
+
   const mapUrl = useMemo(() => {
     const params = new URLSearchParams();
 
@@ -37,6 +39,8 @@ function StandaloneRouteMapFrame({
       params.set('mapMode', String(mapMode));
     }
 
+    params.set('v', String(cacheBustRef.current));
+
     params.set('focus', '1');
     params.set('embed', '1');
 
@@ -50,7 +54,7 @@ function StandaloneRouteMapFrame({
         src={mapUrl}
         className="h-full w-full"
         title="Standalone RTU topology map"
-        loading="lazy"
+        loading="eager"
         referrerPolicy="no-referrer"
       />
     </div>

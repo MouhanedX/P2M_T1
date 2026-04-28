@@ -347,6 +347,8 @@ const extractAlarmFaultDistanceKm = (alarm) => {
     ?? details.event_distance_km
     ?? details.faultDistanceKm
     ?? details.fault_distance_km
+    ?? details.faultLocationKm
+    ?? details.fault_location_km
     ?? details.breakDistanceKm
     ?? details.break_distance_km
     ?? details.locationKm
@@ -357,6 +359,8 @@ const extractAlarmFaultDistanceKm = (alarm) => {
     ?? alarm?.event_distance_km
     ?? alarm?.faultDistanceKm
     ?? alarm?.fault_distance_km
+    ?? alarm?.faultLocationKm
+    ?? alarm?.fault_location_km
     ?? alarm?.breakDistanceKm
     ?? alarm?.break_distance_km
     ?? alarm?.locationKm
@@ -1621,7 +1625,7 @@ function Dashboard({ activeView, setActiveView }) {
                               routeId={selectedRouteHistory?.routeId}
                               routeName={selectedRouteHistory?.routeName}
                               rtuId={selectedRouteHistory?.rtuId}
-                              faultDistanceKm={routeActiveFault?.faultDistanceKm}
+                              faultDistanceKm={routeActiveFault?.faultDistanceKm ?? selectedRouteHistory?.currentCondition?.faultDistanceKm}
                               mapMode="route"
                               className="h-[300px]"
                             />
@@ -1845,7 +1849,7 @@ function Dashboard({ activeView, setActiveView }) {
                       routeId={selectedAlarmMapContext.route?.routeId || selectedAlarmMapContext.alarm?.routeId || selectedAlarmMapContext.alarm?.route_id}
                       routeName={selectedAlarmMapContext.route?.routeName || selectedAlarmMapContext.alarm?.routeName || selectedAlarmMapContext.alarm?.route_name}
                       rtuId={selectedAlarmMapContext.route?.rtuId || selectedAlarmMapContext.alarm?.rtuId || selectedAlarmMapContext.alarm?.rtu_id}
-                      faultDistanceKm={selectedAlarmMapContext.faultDistanceKm}
+                      faultDistanceKm={selectedAlarmMapContext.faultDistanceKm ?? selectedAlarmMapContext.route?.currentCondition?.faultDistanceKm}
                       mapMode="alarm"
                       className="h-[420px]"
                     />
