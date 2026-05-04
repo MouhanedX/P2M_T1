@@ -1616,20 +1616,32 @@ function Dashboard({ activeView, setActiveView }) {
                             </div>
                           </div>
 
-                          <div className="mb-4 rounded-lg border border-slate-200 bg-white/75 p-3">
-                            <div className="mb-2 flex items-center gap-2">
-                              <MapPinned className="h-4 w-4 text-cyan-700" />
-                              <p className="text-xs font-semibold text-slate-800">Live optical topology map</p>
+                          {(Number.isFinite(routeActiveFault?.faultDistanceKm)
+                            || ['BREAK','BROKEN','FIBER_BREAK','DEGRADATION','DEGRADED','HIGH_LOSS_SPLICE']
+                              .includes(normalizeRouteStatus(selectedRouteHistory?.status))) ? (
+                            <div className="mb-4 rounded-lg border border-slate-200 bg-white/75 p-3">
+                              <div className="mb-2 flex items-center gap-2">
+                                <MapPinned className="h-4 w-4 text-cyan-700" />
+                                <p className="text-xs font-semibold text-slate-800">Live optical topology map</p>
+                              </div>
+                              <StandaloneRouteMapFrame
+                                routeId={selectedRouteHistory?.routeId}
+                                routeName={selectedRouteHistory?.routeName}
+                                rtuId={selectedRouteHistory?.rtuId}
+                                faultDistanceKm={routeActiveFault?.faultDistanceKm ?? selectedRouteHistory?.currentCondition?.faultDistanceKm}
+                                mapMode="route"
+                                className="h-[300px]"
+                              />
                             </div>
-                            <StandaloneRouteMapFrame
-                              routeId={selectedRouteHistory?.routeId}
-                              routeName={selectedRouteHistory?.routeName}
-                              rtuId={selectedRouteHistory?.rtuId}
-                              faultDistanceKm={routeActiveFault?.faultDistanceKm ?? selectedRouteHistory?.currentCondition?.faultDistanceKm}
-                              mapMode="route"
-                              className="h-[300px]"
-                            />
-                          </div>
+                          ) : (
+                            <div className="mb-4 rounded-lg border border-slate-200 bg-white/75 p-3">
+                              <div className="mb-2 flex items-center gap-2">
+                                <MapPinned className="h-4 w-4 text-cyan-700" />
+                                <p className="text-xs font-semibold text-slate-800">Topology map</p>
+                              </div>
+                              <p className="text-sm text-slate-600">Topology map is available only for degraded or broken routes.</p>
+                            </div>
+                          )}
 
                           {routeDistanceTraceLoading ? (
                             <p className="text-sm text-slate-600">Loading distance profile...</p>
