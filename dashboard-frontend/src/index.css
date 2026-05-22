@@ -106,3 +106,50 @@
     @apply bg-gray-200 text-gray-800 hover:bg-gray-300;
   }
 }
+
+@media print {
+  html,
+  body,
+  #root {
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  body {
+    overflow: visible !important;
+  }
+
+  header,
+  .report-toolbar {
+    display: none !important;
+  }
+
+  main {
+    padding: 0 !important;
+  }
+
+  .report-print-root {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  .report-print-root,
+  .report-print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .report-print-root .rounded-3xl,
+  .report-print-root .rounded-2xl,
+  .report-print-root .rounded-xl {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-print-root table,
+  .report-print-root tr,
+  .report-print-root td,
+  .report-print-root th {
+    page-break-inside: avoid;
+  }
+}

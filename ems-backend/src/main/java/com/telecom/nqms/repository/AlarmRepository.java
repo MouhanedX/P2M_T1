@@ -53,6 +53,10 @@ public interface AlarmRepository extends MongoRepository<Alarm, String> {
     @Query("{'lifecycle.createdAt': {$gte: ?0}}")
     List<Alarm> findCreatedSince(Instant since);
 
+    List<Alarm> findByLifecycleCreatedAtBetweenOrderByLifecycleCreatedAtAsc(Instant start, Instant end);
+
+    List<Alarm> findByRtuIdAndLifecycleCreatedAtBetweenOrderByLifecycleCreatedAtAsc(String rtuId, Instant start, Instant end);
+
     @Query("{'status': 'ACTIVE', 'lifecycle.assignedToTechnician': true, 'lifecycle.autoResolveAt': {$lte: ?0}}")
     List<Alarm> findDueAutoResolvableAlarms(Instant now);
 }

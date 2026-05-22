@@ -5,6 +5,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.List;
 
 @Repository
@@ -17,4 +18,8 @@ public interface OtdrTestResultRepository extends MongoRepository<OtdrTestResult
     List<OtdrTestResult> findByRtuIdOrderByMeasuredAtDesc(String rtuId, Pageable pageable);
 
     List<OtdrTestResult> findByRouteIdAndRtuIdOrderByMeasuredAtDesc(String routeId, String rtuId, Pageable pageable);
+
+    List<OtdrTestResult> findByMeasuredAtBetweenOrderByMeasuredAtAsc(Instant start, Instant end);
+
+    List<OtdrTestResult> findByRtuIdAndMeasuredAtBetweenOrderByMeasuredAtAsc(String rtuId, Instant start, Instant end);
 }

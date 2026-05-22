@@ -8,6 +8,7 @@ import KpiCard from './KpiCard';
 import AlarmList from './AlarmList';
 import NetworkStatusChart from './NetworkStatusChart';
 import AvailabilityRangeChart from './AvailabilityRangeChart';
+import ReportGenerator from './ReportPdfGenerator';
 import StandaloneRouteMapFrame from './StandaloneRouteMapFrame';
 import { AlertCircle, Activity, Router, ShieldCheck, Clock3, Radar, ExternalLink, History, Download, X, MapPinned } from 'lucide-react';
 
@@ -1430,6 +1431,16 @@ function Dashboard({ activeView, setActiveView }) {
   const displayedNormalRoutes = isRtuView ? selectedRtuRouteSummary.normalRoutes : (kpi?.metrics?.routesNormal || 0);
   const displayedMttrHours = isRtuView ? selectedRtuMttrHours : mttrHours;
   const displayedMtbfHours = isRtuView ? selectedRtuMtbfHours : mtbfHours;
+
+  if (activeView === 'reports') {
+    return (
+      <div className="w-full bg-transparent">
+        <div className="space-y-6 px-3 py-4 sm:px-5 lg:px-8">
+          <ReportGenerator rtus={rtus} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full bg-transparent">

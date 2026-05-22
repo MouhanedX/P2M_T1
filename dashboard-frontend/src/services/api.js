@@ -93,4 +93,9 @@ export const otdrAPI = {
   }
 };
 
+// Reports API - From EMS Backend
+export const reportsAPI = {
+  generateHealthReport: (payload) => emsApi.post('/reports/health', payload),
+};
+
 export { emsApi, rtuApi };

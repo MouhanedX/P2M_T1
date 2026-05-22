@@ -1,4 +1,4 @@
-import { LogOut, LayoutDashboard, Activity, Router, SlidersHorizontal, Wrench } from 'lucide-react';
+import { LogOut, LayoutDashboard, Activity, Router, SlidersHorizontal, Wrench, BarChart3 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 function Header({ wsConnected, onLogout, activeView, setActiveView }) {
@@ -59,6 +59,7 @@ function Header({ wsConnected, onLogout, activeView, setActiveView }) {
                   { id: 'noc', label: 'Dashboard', icon: LayoutDashboard },
                   { id: 'rtus', label: 'RTUs', icon: Activity },
                   { id: 'network', label: 'Optical Network', icon: Router },
+                  { id: 'reports', label: 'Reports', icon: BarChart3 },
                   { id: 'test', label: 'Alarm Test', icon: Wrench },
                   { id: 'config', label: 'Test Configuration', icon: SlidersHorizontal }
                 ].map(({ id, label, icon: Icon }) => (
